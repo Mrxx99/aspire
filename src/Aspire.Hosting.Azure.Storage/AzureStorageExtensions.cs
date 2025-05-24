@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Data;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Azure.Storage;
@@ -26,6 +25,15 @@ public static class AzureStorageExtensions
     /// <param name="builder">The builder for the distributed application.</param>
     /// <param name="name">The name of the resource.</param>
     /// <returns></returns>
+    /// <remarks>
+    /// By default references to the Azure Storage resource will be assigned the following roles:
+    /// 
+    /// - <see cref="StorageBuiltInRole.StorageBlobDataContributor"/>
+    /// - <see cref="StorageBuiltInRole.StorageTableDataContributor"/>
+    /// - <see cref="StorageBuiltInRole.StorageQueueDataContributor"/>
+    ///
+    /// These can be replaced by calling <see cref="WithRoleAssignments{T}(IResourceBuilder{T}, IResourceBuilder{AzureStorageResource}, StorageBuiltInRole[])"/>.
+    /// </remarks>
     public static IResourceBuilder<AzureStorageResource> AddAzureStorage(this IDistributedApplicationBuilder builder, [ResourceName] string name)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -69,33 +77,30 @@ public static class AzureStorageExtensions
             };
             infrastructure.Add(blobs);
 
-            if (infrastructure.AspireResource.TryGetLastAnnotation<AppliedRoleAssignmentsAnnotation>(out var appliedRoleAssignments))
-            {
-                var principalTypeParameter = new ProvisioningParameter(AzureBicepResource.KnownParameters.PrincipalType, typeof(string));
-                infrastructure.Add(principalTypeParameter);
-                var principalIdParameter = new ProvisioningParameter(AzureBicepResource.KnownParameters.PrincipalId, typeof(string));
-                infrastructure.Add(principalIdParameter);
-
-                foreach (var role in appliedRoleAssignments.Roles)
-                {
-                    infrastructure.Add(storageAccount.CreateRoleAssignment(new StorageBuiltInRole(role.Id), principalTypeParameter, principalIdParameter));
-                }
-            }
-
             infrastructure.Add(new ProvisioningOutput("blobEndpoint", typeof(string)) { Value = storageAccount.PrimaryEndpoints.BlobUri });
             infrastructure.Add(new ProvisioningOutput("queueEndpoint", typeof(string)) { Value = storageAccount.PrimaryEndpoints.QueueUri });
             infrastructure.Add(new ProvisioningOutput("tableEndpoint", typeof(string)) { Value = storageAccount.PrimaryEndpoints.TableUri });
 
-            // We need to name to externalize role assignments.
+            var azureResource = (AzureStorageResource)infrastructure.AspireResource;
+
+            foreach (var blobContainer in azureResource.BlobContainers)
+            {
+                var cdkBlobContainer = blobContainer.ToProvisioningEntity();
+                cdkBlobContainer.Parent = blobs;
+                infrastructure.Add(cdkBlobContainer);
+            }
+
+            // We need to output name to externalize role assignments.
             infrastructure.Add(new ProvisioningOutput("name", typeof(string)) { Value = storageAccount.Name });
         };
 
         var resource = new AzureStorageResource(name, configureInfrastructure);
+
         return builder.AddResource(resource)
-                      .WithDefaultRoleAssignments(
-                        StorageBuiltInRole.StorageBlobDataContributor,
-                        StorageBuiltInRole.StorageTableDataContributor,
-                        StorageBuiltInRole.StorageQueueDataContributor);
+            .WithDefaultRoleAssignments(StorageBuiltInRole.GetBuiltInRoleName,
+                StorageBuiltInRole.StorageBlobDataContributor,
+                StorageBuiltInRole.StorageTableDataContributor,
+                StorageBuiltInRole.StorageQueueDataContributor);
     }
 
     /// <summary>
@@ -127,17 +132,31 @@ public static class AzureStorageExtensions
                });
 
         BlobServiceClient? blobServiceClient = null;
-
         builder.ApplicationBuilder.Eventing.Subscribe<BeforeResourceStartedEvent>(builder.Resource, async (@event, ct) =>
         {
-            var connectionString = await builder.Resource.GetBlobConnectionString().GetValueAsync(ct).ConfigureAwait(false);
+            // The BlobServiceClient is created before the health check is run.
+            // We can't use ConnectionStringAvailableEvent here because the resource doesn't have a connection string, so
+            // we use BeforeResourceStartedEvent
 
-            if (connectionString == null)
+            var connectionString = await builder.Resource.GetBlobConnectionString().GetValueAsync(ct).ConfigureAwait(false) ?? throw new DistributedApplicationException($"{nameof(ConnectionStringAvailableEvent)} was published for the '{builder.Resource.Name}' resource but the connection string was null.");
+            blobServiceClient = CreateBlobServiceClient(connectionString);
+        });
+
+        builder.ApplicationBuilder.Eventing.Subscribe<ResourceReadyEvent>(builder.Resource, async (@event, ct) =>
+        {
+            // The ResourceReadyEvent of a resource is triggered after its health check is healthy.
+            // This means we can safely use this event to create the blob containers.
+
+            if (blobServiceClient is null)
             {
-                throw new DistributedApplicationException($"ConnectionStringAvailableEvent was published for the '{builder.Resource.Name}' resource but the connection string was null.");
+                throw new InvalidOperationException("BlobServiceClient is not initialized.");
             }
 
-            blobServiceClient = CreateBlobServiceClient(connectionString);
+            foreach (var container in builder.Resource.BlobContainers)
+            {
+                var blobContainerClient = blobServiceClient.GetBlobContainerClient(container.BlobContainerName);
+                await blobContainerClient.CreateIfNotExistsAsync(cancellationToken: ct).ConfigureAwait(false);
+            }
         });
 
         var healthCheckKey = $"{builder.Resource.Name}_check";
@@ -160,18 +179,6 @@ public static class AzureStorageExtensions
         configureContainer?.Invoke(surrogateBuilder);
 
         return builder;
-
-        static BlobServiceClient CreateBlobServiceClient(string connectionString)
-        {
-            if (Uri.TryCreate(connectionString, UriKind.Absolute, out var uri))
-            {
-                return new BlobServiceClient(uri, new DefaultAzureCredential());
-            }
-            else
-            {
-                return new BlobServiceClient(connectionString);
-            }
-        }
     }
 
     /// <summary>
@@ -286,7 +293,57 @@ public static class AzureStorageExtensions
         ArgumentException.ThrowIfNullOrEmpty(name);
 
         var resource = new AzureBlobStorageResource(name, builder.Resource);
-        return builder.ApplicationBuilder.AddResource(resource);
+
+        string? connectionString = null;
+        builder.ApplicationBuilder.Eventing.Subscribe<ConnectionStringAvailableEvent>(resource, async (@event, ct) =>
+        {
+            connectionString = await resource.ConnectionStringExpression.GetValueAsync(ct).ConfigureAwait(false);
+        });
+
+        var healthCheckKey = $"{resource.Name}_check";
+
+        BlobServiceClient? blobServiceClient = null;
+        builder.ApplicationBuilder.Services.AddHealthChecks().AddAzureBlobStorage(sp =>
+        {
+            return blobServiceClient ??= CreateBlobServiceClient(connectionString ?? throw new InvalidOperationException("Connection string is not initialized."));
+        }, name: healthCheckKey);
+
+        return builder.ApplicationBuilder.AddResource(resource).WithHealthCheck(healthCheckKey);
+    }
+
+    /// <summary>
+    /// Creates a builder for the <see cref="AzureBlobStorageContainerResource"/> which can be referenced to get the Azure Storage blob container endpoint for the storage account.
+    /// </summary>
+    /// <param name="builder">The <see cref="IResourceBuilder{T}"/> for <see cref="AzureBlobStorageResource"/>/</param>
+    /// <param name="name">The name of the resource.</param>
+    /// <param name="blobContainerName">The name of the blob container.</param>
+    /// <returns>An <see cref="IResourceBuilder{T}"/> for the <see cref="AzureBlobStorageContainerResource"/>.</returns>
+    public static IResourceBuilder<AzureBlobStorageContainerResource> AddBlobContainer(this IResourceBuilder<AzureBlobStorageResource> builder, [ResourceName] string name, string? blobContainerName = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        blobContainerName ??= name;
+
+        AzureBlobStorageContainerResource resource = new(name, blobContainerName, builder.Resource);
+        builder.Resource.Parent.BlobContainers.Add(resource);
+
+        string? connectionString = null;
+        builder.ApplicationBuilder.Eventing.Subscribe<ConnectionStringAvailableEvent>(resource, async (@event, ct) =>
+        {
+            connectionString = await resource.Parent.ConnectionStringExpression.GetValueAsync(ct).ConfigureAwait(false);
+        });
+
+        var healthCheckKey = $"{resource.Name}_check";
+
+        BlobServiceClient? blobServiceClient = null;
+        builder.ApplicationBuilder.Services.AddHealthChecks().AddAzureBlobStorage(
+            sp => blobServiceClient ??= CreateBlobServiceClient(connectionString ?? throw new InvalidOperationException("Connection string is not initialized.")),
+            optionsFactory: sp => new HealthChecks.Azure.Storage.Blobs.AzureBlobStorageHealthCheckOptions { ContainerName = blobContainerName },
+            name: healthCheckKey);
+
+        return builder.ApplicationBuilder
+            .AddResource(resource).WithHealthCheck(healthCheckKey);
     }
 
     /// <summary>
@@ -319,16 +376,29 @@ public static class AzureStorageExtensions
         return builder.ApplicationBuilder.AddResource(resource);
     }
 
+    private static BlobServiceClient CreateBlobServiceClient(string connectionString)
+    {
+        if (Uri.TryCreate(connectionString, UriKind.Absolute, out var uri))
+        {
+            return new BlobServiceClient(uri, new DefaultAzureCredential());
+        }
+        else
+        {
+            return new BlobServiceClient(connectionString);
+        }
+    }
+
     /// <summary>
     /// Assigns the specified roles to the given resource, granting it the necessary permissions
-    /// on the target Azure Storage account.
+    /// on the target Azure Storage account. This replaces the default role assignments for the resource.
     /// </summary>
     /// <param name="builder">The resource to which the specified roles will be assigned.</param>
     /// <param name="target">The target Azure Storage account.</param>
     /// <param name="roles">The built-in storage roles to be assigned.</param>
     /// <returns>The updated <see cref="IResourceBuilder{T}"/> with the applied role assignments.</returns>
+    /// <remarks>
     /// <example>
-    /// Adds the StorageBlobDataContributor role to the 'Projects.Api' project.
+    /// Assigns the StorageBlobDataContributor role to the 'Projects.Api' project.
     /// <code lang="csharp">
     /// var builder = DistributedApplication.CreateBuilder(args);
     ///
@@ -340,20 +410,13 @@ public static class AzureStorageExtensions
     ///   .WithReference(blobs);
     /// </code>
     /// </example>
+    /// </remarks>
     public static IResourceBuilder<T> WithRoleAssignments<T>(
         this IResourceBuilder<T> builder,
         IResourceBuilder<AzureStorageResource> target,
         params StorageBuiltInRole[] roles)
         where T : IResource
     {
-        return builder.WithAnnotation(new RoleAssignmentAnnotation(target.Resource, CreateRoleDefinitions(roles)));
+        return builder.WithRoleAssignments(target, StorageBuiltInRole.GetBuiltInRoleName, roles);
     }
-
-    private static IResourceBuilder<AzureStorageResource> WithDefaultRoleAssignments(this IResourceBuilder<AzureStorageResource> builder, params StorageBuiltInRole[] roles)
-    {
-        return builder.WithAnnotation(new DefaultRoleAssignmentsAnnotation(CreateRoleDefinitions(roles)));
-    }
-
-    private static HashSet<RoleDefinition> CreateRoleDefinitions(IReadOnlyList<StorageBuiltInRole> roles) =>
-        [.. roles.Select(r => new RoleDefinition(r.ToString(), StorageBuiltInRole.GetBuiltInRoleName(r)))];
 }

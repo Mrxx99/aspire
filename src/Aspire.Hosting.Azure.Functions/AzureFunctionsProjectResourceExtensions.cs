@@ -5,7 +5,6 @@ using System.Globalization;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Utils;
-using Azure.Provisioning;
 using Azure.Provisioning.Storage;
 
 namespace Aspire.Hosting;
@@ -47,29 +46,18 @@ public static class AzureFunctionsProjectResourceExtensions
             .OfType<AzureStorageResource>()
             .FirstOrDefault(r => r.Name == storageResourceName);
 
-        // Azure Functions blob triggers require StorageAccountContributor access to the host storage
-        // account when deployed. We assign this role to the host storage resource when running in publish mode.
         if (storage is null)
         {
-            if (builder.ExecutionContext.IsPublishMode)
-            {
-                var configureInfrastructure = (AzureResourceInfrastructure infrastructure) =>
-                {
-                    var principalTypeParameter = new ProvisioningParameter(AzureBicepResource.KnownParameters.PrincipalType, typeof(string));
-                    var principalIdParameter = new ProvisioningParameter(AzureBicepResource.KnownParameters.PrincipalId, typeof(string));
-
-                    var storageAccount = infrastructure.GetProvisionableResources().OfType<StorageAccount>().FirstOrDefault(r => r.BicepIdentifier == storageResourceName)
-                        ?? throw new InvalidOperationException($"Could not find storage account with '{storageResourceName}' name.");
-                    infrastructure.Add(storageAccount.CreateRoleAssignment(StorageBuiltInRole.StorageAccountContributor, principalTypeParameter, principalIdParameter));
-                };
-                storage = builder.AddAzureStorage(storageResourceName)
-                    .ConfigureInfrastructure(configureInfrastructure)
-                    .RunAsEmulator().Resource;
-            }
-            else
-            {
-                storage = builder.AddAzureStorage(storageResourceName).RunAsEmulator().Resource;
-            }
+            storage = builder.AddAzureStorage(storageResourceName)
+                // Azure Functions blob triggers require StorageAccountContributor access to the host storage
+                // account when deployed. We assign this role to the implicit host storage resource.
+                .WithDefaultRoleAssignments(StorageBuiltInRole.GetBuiltInRoleName,
+                    StorageBuiltInRole.StorageBlobDataContributor,
+                    StorageBuiltInRole.StorageTableDataContributor,
+                    StorageBuiltInRole.StorageQueueDataContributor,
+                    StorageBuiltInRole.StorageAccountContributor)
+                .RunAsEmulator()
+                .Resource;
         }
 
         builder.Eventing.Subscribe<BeforeStartEvent>((data, token) =>
@@ -82,6 +70,12 @@ public static class AzureFunctionsProjectResourceExtensions
                 if (item.HostStorage == storage)
                 {
                     removeStorage = false;
+                }
+
+                if (item.HostStorage is not null)
+                {
+                    // Add the relationship to the host storage resource.
+                    builder.CreateResourceBuilder(item).WithReferenceRelationship(item.HostStorage);
                 }
             }
 
@@ -231,6 +225,8 @@ public static class AzureFunctionsProjectResourceExtensions
     {
         ArgumentNullException.ThrowIfNull(destination);
         ArgumentNullException.ThrowIfNull(source);
+
+        destination.WithReferenceRelationship(source.Resource);
 
         return destination.WithEnvironment(context =>
         {

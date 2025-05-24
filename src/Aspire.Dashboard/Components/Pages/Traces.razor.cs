@@ -19,7 +19,7 @@ using Microsoft.JSInterop;
 
 namespace Aspire.Dashboard.Components.Pages;
 
-public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewModel, Traces.TracesPageState>
+public partial class Traces : IComponentWithTelemetry, IPageWithSessionAndUrlState<Traces.TracesPageViewModel, Traces.TracesPageState>
 {
     private const string TimestampColumn = nameof(TimestampColumn);
     private const string NameColumn = nameof(NameColumn);
@@ -81,6 +81,12 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
     [Inject]
     public required DimensionManager DimensionManager { get; init; }
 
+    [Inject]
+    public required PauseManager PauseManager { get; init; }
+
+    [Inject]
+    public required ComponentTelemetryContextProvider TelemetryContextProvider { get; init; }
+
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
@@ -141,7 +147,7 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
         return GridItemsProviderResult.From(traces.Items, traces.TotalItemCount);
     }
 
-    protected override Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
         (_resizeLabels, _sortLabels) = DashboardUIHelpers.CreateGridLabels(ControlsStringsLoc);
 
@@ -163,12 +169,7 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
             StateHasChanged();
         }));
 
-        return Task.CompletedTask;
-    }
-
-    private void DimensionManager_OnViewportSizeChanged(object sender, ViewportSizeChangedEventArgs e)
-    {
-        throw new NotImplementedException();
+        TelemetryContextProvider.Initialize(TelemetryContext);
     }
 
     protected override async Task OnParametersSetAsync()
@@ -184,7 +185,7 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
 
     private void UpdateApplications()
     {
-        _applications = TelemetryRepository.GetApplications();
+        _applications = TelemetryRepository.GetApplications(includeUninstrumentedPeers: true);
         _applicationViewModels = ApplicationsSelectHelpers.CreateApplications(_applications);
         _applicationViewModels.Insert(0, _allApplication);
         UpdateSubscription();
@@ -244,6 +245,13 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
             await JS.InvokeVoidAsync("initializeContinuousScroll");
         });
     }
+
+    private string? PauseText => PauseManager.AreTracesPaused(out var startTime)
+        ? string.Format(
+            CultureInfo.CurrentCulture,
+            Loc[nameof(Dashboard.Resources.Traces.PauseInProgressText)],
+            FormatHelpers.FormatTimeWithOptionalDate(TimeProvider, startTime.Value, MillisecondsDisplay.Truncated))
+        : null;
 
     public void Dispose()
     {
@@ -332,6 +340,14 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
             {
                 TracesViewModel.AddFilter(filter);
             }
+            else if (filterResult.Enable)
+            {
+                filter.Enabled = true;
+            }
+            else if (filterResult.Disable)
+            {
+                filter.Enabled = false;
+            }
         }
 
         await this.AfterViewModelChangedAsync(_contentLayout, waitToApplyMobileChange: true);
@@ -341,6 +357,17 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
     {
         TelemetryRepository.ClearTraces(key);
         return Task.CompletedTask;
+    }
+
+    private List<MenuButtonItem> GetFilterMenuItems()
+    {
+        return this.GetFilterMenuItems(
+            TracesViewModel.Filters,
+            clearFilters: TracesViewModel.ClearFilters,
+            openFilterAsync: OpenFilterAsync,
+            filterLoc: FilterLoc,
+            dialogsLoc: DialogsLoc,
+            contentLayout: _contentLayout);
     }
 
     public class TracesPageViewModel
@@ -353,4 +380,7 @@ public partial class Traces : IPageWithSessionAndUrlState<Traces.TracesPageViewM
         public string? SelectedApplication { get; set; }
         public required IReadOnlyCollection<TelemetryFilter> Filters { get; set; }
     }
+
+    // IComponentWithTelemetry impl
+    public ComponentTelemetryContext TelemetryContext { get; } = new(DashboardUrls.TracesBasePath);
 }

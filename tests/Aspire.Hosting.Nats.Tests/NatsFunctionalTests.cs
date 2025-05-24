@@ -3,10 +3,9 @@
 
 using System.Net;
 using System.Net.Http.Json;
-using Aspire.Components.Common.Tests;
+using Aspire.TestUtilities;
 using Aspire.Hosting.Utils;
 using Xunit;
-using Xunit.Abstractions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using NATS.Client.Core;

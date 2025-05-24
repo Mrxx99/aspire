@@ -1,11 +1,14 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Dashboard.Components.Pages;
 using Aspire.Dashboard.Components.Resize;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.BrowserStorage;
 using Aspire.Dashboard.Otlp.Storage;
+using Aspire.Dashboard.Telemetry;
+using Aspire.Dashboard.Tests;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -39,6 +42,7 @@ internal static class MetricsSetupHelpers
         context.Services.AddLocalization();
         context.Services.AddSingleton<IInstrumentUnitResolver, TestInstrumentUnitResolver>();
         context.Services.AddSingleton<BrowserTimeProvider, TestTimeProvider>();
+        context.Services.AddSingleton<PauseManager>();
         context.Services.AddSingleton<TelemetryRepository>();
         context.Services.AddSingleton<IDialogService, DialogService>();
     }
@@ -57,7 +61,7 @@ internal static class MetricsSetupHelpers
         var dataGridRef = dataGridModule.SetupModule("init", _ => true);
         dataGridRef.SetupVoid("stop");
 
-        var listModule = context.JSInterop.SetupModule(GetFluentFile("./_content/Microsoft.FluentUI.AspNetCore.Components/Components/List/ListComponentBase.razor.js", version));
+        context.JSInterop.SetupModule(GetFluentFile("./_content/Microsoft.FluentUI.AspNetCore.Components/Components/List/ListComponentBase.razor.js", version));
 
         var searchModule = context.JSInterop.SetupModule(GetFluentFile("./_content/Microsoft.FluentUI.AspNetCore.Components/Components/Search/FluentSearch.razor.js", version));
         searchModule.SetupVoid("addAriaHidden", _ => true);
@@ -73,9 +77,12 @@ internal static class MetricsSetupHelpers
 
         context.JSInterop.SetupModule(GetFluentFile("./_content/Microsoft.FluentUI.AspNetCore.Components/Components/Toolbar/FluentToolbar.razor.js", version));
 
+        context.JSInterop.SetupModule(GetFluentFile("./_content/Microsoft.FluentUI.AspNetCore.Components/Components/Menu/FluentMenu.razor.js", version));
+
         SetupChartContainer(context);
 
         context.Services.AddLocalization();
+        context.Services.AddSingleton<PauseManager>();
         context.Services.AddSingleton<TelemetryRepository>();
         context.Services.AddSingleton<IMessageService, MessageService>();
         context.Services.AddSingleton<IOptions<DashboardOptions>>(Options.Create(new DashboardOptions()));
@@ -89,6 +96,9 @@ internal static class MetricsSetupHelpers
         context.Services.AddSingleton<IKeyCodeService, KeyCodeService>();
         context.Services.AddSingleton<IThemeResolver, TestThemeResolver>();
         context.Services.AddSingleton<ThemeManager>();
+        context.Services.AddSingleton<IDashboardTelemetrySender, TestDashboardTelemetrySender>();
+        context.Services.AddSingleton<DashboardTelemetryService>();
+        context.Services.AddSingleton<ComponentTelemetryContextProvider>();
     }
 
     private static string GetFluentFile(string filePath, Version version)

@@ -4,6 +4,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -22,6 +23,8 @@ public static class OtlpHelpers
     {
         WriteIndented = false
     };
+
+    public const int ShortenedIdLength = 7;
 
     public static ApplicationKey GetApplicationKey(this Resource resource)
     {
@@ -61,7 +64,7 @@ public static class OtlpHelpers
         return new ApplicationKey(serviceName, serviceInstanceId ?? serviceName);
     }
 
-    public static string ToShortenedId(string id) => TruncateString(id, maxLength: 7);
+    public static string ToShortenedId(string id) => TruncateString(id, maxLength: ShortenedIdLength);
 
     public static string ToHexString(ReadOnlyMemory<byte> bytes)
     {
@@ -426,5 +429,41 @@ public static class OtlpHelpers
             TotalItemCount = totalItemCount,
             IsFull = isFull
         };
+    }
+
+    public static bool MatchTelemetryId(string incomingId, string existingId)
+    {
+        // This method uses StartsWith to find a match.
+        // We only want to use that logic if the traceId is at least the length of a shortened id.
+        if (incomingId.Length >= ShortenedIdLength)
+        {
+            return existingId.StartsWith(incomingId, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            return existingId.Equals(incomingId, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    public static bool TryAddScope(Dictionary<string, OtlpScope> scopes, InstrumentationScope? scope, OtlpContext context, [NotNullWhen(true)] out OtlpScope? s)
+    {
+        try
+        {
+            // The instrumentation scope information for the spans in this message.
+            // Semantically when InstrumentationScope isn't set, it is equivalent with
+            // an empty instrumentation scope name (unknown).
+            var name = scope?.Name ?? string.Empty;
+            ref var scopeRef = ref CollectionsMarshal.GetValueRefOrAddDefault(scopes, name, out _);
+            // Adds to dictionary if not present.
+            scopeRef ??= (scope != null) ? new OtlpScope(scope.Name, scope.Version, scope.Attributes.ToKeyValuePairs(context)) : OtlpScope.Empty;
+            s = scopeRef;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            context.Logger.LogInformation(ex, "Error adding scope.");
+            s = null;
+            return false;
+        }
     }
 }

@@ -2,16 +2,6 @@
 <xliff xmlns="urn:oasis:names:tc:xliff:document:1.2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="1.2" xsi:schemaLocation="urn:oasis:names:tc:xliff:document:1.2 xliff-core-1.2-transitional.xsd">
   <file datatype="xml" source-language="en" target-language="zh-Hant" original="../Columns.resx">
     <body>
-      <trans-unit id="EndpointsColumnDisplayOverflowTitle">
-        <source>Endpoints</source>
-        <target state="translated">端點</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="EndpointsColumnDisplayPlaceholder">
-        <source>Starting...</source>
-        <target state="translated">正在開始...</target>
-        <note />
-      </trans-unit>
       <trans-unit id="PersistentContainerIconTooltip">
         <source>This container is persistent and won't be stopped when the app host is shut down.</source>
         <target state="translated">此容器是持續性的，而且不會在應用程式主機關閉時停止。</target>
@@ -33,8 +23,8 @@
         <note>{0} is a numeric id</note>
       </trans-unit>
       <trans-unit id="RunningAndUnhealthyResourceStateToolTip">
-        <source>Resource is running but not in a healthy state. Click for details.</source>
-        <target state="translated">資源正在執行，但未處於良好的狀態。按一下以查看詳細資料。</target>
+        <source>Resource is running but not in a healthy state.</source>
+        <target state="new">Resource is running but not in a healthy state.</target>
         <note>Tool tip text explaining that the resource is running but not yet ready to receive requests.</note>
       </trans-unit>
       <trans-unit id="SourceColumnDisplayContainerArgsTitle">
@@ -99,6 +89,16 @@ For more information, see https://aka.ms/dotnet/aspire/container-runtime-unhealt
         <target state="translated">{0} 意外結束，結束代碼: {1}</target>
         <note>{0} is a resource type, {1} is a number</note>
       </trans-unit>
+      <trans-unit id="StateColumnResourceNotStarted">
+        <source>Resource has not started because it's configured to not automatically start.</source>
+        <target state="new">Resource has not started because it's configured to not automatically start.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="StateColumnResourceWaiting">
+        <source>Resource is waiting for other resources to be in a running and healthy state.</source>
+        <target state="new">Resource is waiting for other resources to be in a running and healthy state.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="UnknownStateLabel">
         <source>Unknown</source>
         <target state="translated">未知</target>
@@ -112,6 +112,16 @@ For more information, see https://aka.ms/dotnet/aspire/container-runtime-unhealt
       <trans-unit id="UnreadLogErrorsBadgeOneErrorLog">
         <source>1 error log</source>
         <target state="translated">1 個錯誤記錄</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="UrlsColumnDisplayOverflowTitle">
+        <source>URLs</source>
+        <target state="translated">URL</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="UrlsColumnDisplayPlaceholder">
+        <source>Starting...</source>
+        <target state="translated">正在啟動...</target>
         <note />
       </trans-unit>
     </body>

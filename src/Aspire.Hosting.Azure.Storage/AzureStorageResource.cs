@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Hosting.ApplicationModel;
-using Azure.Provisioning;
 using Azure.Provisioning.Primitives;
 using Azure.Provisioning.Storage;
 
@@ -16,13 +15,15 @@ namespace Aspire.Hosting.Azure;
 public class AzureStorageResource(string name, Action<AzureResourceInfrastructure> configureInfrastructure)
     : AzureProvisioningResource(name, configureInfrastructure), IResourceWithEndpoints, IResourceWithAzureFunctionsConfig
 {
+    internal const string BlobsConnectionKeyPrefix = "Aspire__Azure__Storage__Blobs";
+    internal const string QueuesConnectionKeyPrefix = "Aspire__Azure__Storage__Queues";
+    internal const string TablesConnectionKeyPrefix = "Aspire__Azure__Data__Tables";
+
     private EndpointReference EmulatorBlobEndpoint => new(this, "blob");
     private EndpointReference EmulatorQueueEndpoint => new(this, "queue");
     private EndpointReference EmulatorTableEndpoint => new(this, "table");
 
-    internal const string BlobsConnectionKeyPrefix = "Aspire__Azure__Storage__Blobs";
-    internal const string QueuesConnectionKeyPrefix = "Aspire__Azure__Storage__Queues";
-    internal const string TablesConnectionKeyPrefix = "Aspire__Azure__Storage__Tables";
+    internal List<AzureBlobStorageContainerResource> BlobContainers { get; } = [];
 
     /// <summary>
     /// Gets the "blobEndpoint" output reference from the bicep template for the Azure Storage resource.
@@ -38,6 +39,8 @@ public class AzureStorageResource(string name, Action<AzureResourceInfrastructur
     /// Gets the "tableEndpoint" output reference from the bicep template for the Azure Storage resource.
     /// </summary>
     public BicepOutputReference TableEndpoint => new("tableEndpoint", this);
+
+    private BicepOutputReference NameOutputReference => new("name", this);
 
     /// <summary>
     /// Gets a value indicating whether the Azure Storage resource is running in the local emulator.
@@ -90,10 +93,11 @@ public class AzureStorageResource(string name, Action<AzureResourceInfrastructur
     }
 
     /// <inheritdoc/>
-    public override ProvisionableResource CreateExistingResource(BicepValue<string> name)
+    public override ProvisionableResource AddAsExistingResource(AzureResourceInfrastructure infra)
     {
-        var account = StorageAccount.FromExisting(Infrastructure.NormalizeBicepIdentifier(Name));
-        account.Name = name;
+        var account = StorageAccount.FromExisting(this.GetBicepIdentifier());
+        account.Name = NameOutputReference.AsProvisioningParameter(infra);
+        infra.Add(account);
         return account;
     }
 }

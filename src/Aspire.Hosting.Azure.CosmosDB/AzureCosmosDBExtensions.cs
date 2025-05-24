@@ -36,7 +36,8 @@ public static class AzureCosmosExtensions
         builder.AddAzureProvisioning();
 
         var resource = new AzureCosmosDBResource(name, ConfigureCosmosDBInfrastructure);
-        return builder.AddResource(resource);
+        return builder.AddResource(resource)
+            .WithAnnotation(new DefaultRoleAssignmentsAnnotation(new HashSet<RoleDefinition>()));
     }
 
     /// <summary>
@@ -64,7 +65,7 @@ public static class AzureCosmosExtensions
     /// <remarks>
     /// This version of the package defaults to the <inheritdoc cref="CosmosDBEmulatorContainerImageTags.TagVNextPreview"/> tag of the <inheritdoc cref="CosmosDBEmulatorContainerImageTags.Registry"/>/<inheritdoc cref="CosmosDBEmulatorContainerImageTags.Image"/> container image.
     /// </remarks>
-    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureCosmosDBResource> RunAsPreviewEmulator(this IResourceBuilder<AzureCosmosDBResource> builder, Action<IResourceBuilder<AzureCosmosDBEmulatorResource>>? configureContainer = null)
         => RunAsEmulator(builder, configureContainer, useVNextPreview: true);
 
@@ -120,7 +121,6 @@ public static class AzureCosmosExtensions
             }
         });
 
-        // Use custom health check that also seeds the databases and containers
         var healthCheckKey = $"{builder.Resource.Name}_check";
         builder.ApplicationBuilder.Services.AddHealthChecks().AddAzureCosmosDB(
             sp => cosmosClient ?? throw new InvalidOperationException("CosmosClient is not initialized."),
@@ -199,7 +199,7 @@ public static class AzureCosmosExtensions
     /// <param name="count">Desired partition count.</param>
     /// <returns>Cosmos emulator resource builder.</returns>
     /// <remarks>Not calling this method will result in the default of 10 partitions. The actual started partitions is always one more than specified.
-    /// See <a href="https://learn.microsoft.com/en-us/azure/cosmos-db/emulator-windows-arguments#change-the-number-of-default-containers">this documentation</a> about setting the partition count.
+    /// See <a href="https://learn.microsoft.com/azure/cosmos-db/emulator-windows-arguments#change-the-number-of-default-containers">this documentation</a> about setting the partition count.
     /// </remarks>
     public static IResourceBuilder<AzureCosmosDBEmulatorResource> WithPartitionCount(this IResourceBuilder<AzureCosmosDBEmulatorResource> builder, int count)
     {
@@ -288,7 +288,7 @@ public static class AzureCosmosExtensions
     /// <remarks>
     /// The Data Explorer is only available with <see cref="RunAsPreviewEmulator"/>.
     /// </remarks>
-    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+    [Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureCosmosDBEmulatorResource> WithDataExplorer(this IResourceBuilder<AzureCosmosDBEmulatorResource> builder, int? port = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -298,19 +298,31 @@ public static class AzureCosmosExtensions
             throw new NotSupportedException($"The Data Explorer endpoint is only available when using the preview version of the Azure Cosmos DB emulator. Call '{nameof(RunAsPreviewEmulator)}' instead.");
         }
 
-        return builder.WithEndpoint(endpointName: "data-explorer", endpoint =>
-        {
-            endpoint.UriScheme = "http";
-            endpoint.TargetPort = 1234;
-            endpoint.Port = port;
-        });
+        return
+            builder.WithEndpoint(endpointName: KnownUrls.DataExplorer.EndpointName, endpoint =>
+            {
+                endpoint.UriScheme = "http";
+                endpoint.TargetPort = 1234;
+                endpoint.Port = port;
+            })
+            .WithUrls(context =>
+            {
+                var url = context.Urls.FirstOrDefault(u => u.Endpoint?.EndpointName == KnownUrls.DataExplorer.EndpointName);
+#pragma warning disable IDE0031 // Use null propagation (IDE0031)
+                if (url is not null)
+#pragma warning restore IDE0031
+                {
+                    url.DisplayText = KnownUrls.DataExplorer.DisplayText;
+                }
+            });
     }
 
-    /// <summary>    
+    /// <summary>
     /// Configures the resource to use access key authentication with Azure Cosmos DB.
     /// </summary>
     /// <param name="builder">The Azure Cosmos DB resource builder.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> builder.</returns>
+    /// <remarks>
     /// <example>
     /// The following example creates an Azure Cosmos DB resource that uses access key authentication.
     /// <code lang="csharp">
@@ -325,12 +337,53 @@ public static class AzureCosmosExtensions
     /// builder.Build().Run();
     /// </code>
     /// </example>
+    /// </remarks>
     public static IResourceBuilder<AzureCosmosDBResource> WithAccessKeyAuthentication(this IResourceBuilder<AzureCosmosDBResource> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 
+        var kv = builder.ApplicationBuilder.AddAzureKeyVault($"{builder.Resource.Name}-kv")
+                                           .WithParentRelationship(builder.Resource);
+
+        // remove the KeyVault from the model if the emulator is used during run mode.
+        // need to do this later in case builder becomes an emulator after this method is called.
+        if (builder.ApplicationBuilder.ExecutionContext.IsRunMode)
+        {
+            builder.ApplicationBuilder.Eventing.Subscribe<BeforeStartEvent>((data, _) =>
+            {
+                if (builder.Resource.IsEmulator)
+                {
+                    data.Model.Resources.Remove(kv.Resource);
+                }
+                return Task.CompletedTask;
+            });
+        }
+
+        return builder.WithAccessKeyAuthentication(kv);
+    }
+
+    /// <summary>
+    /// Configures the resource to use access key authentication with Azure Cosmos DB.
+    /// </summary>
+    /// <param name="builder">The Azure Cosmos DB resource builder.</param>
+    /// <param name="keyVaultBuilder">The Azure Key Vault resource builder where the connection string used to connect to this AzureCosmosDBResource will be stored.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> builder.</returns>
+    public static IResourceBuilder<AzureCosmosDBResource> WithAccessKeyAuthentication(this IResourceBuilder<AzureCosmosDBResource> builder, IResourceBuilder<IAzureKeyVaultResource> keyVaultBuilder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
         var azureResource = builder.Resource;
-        azureResource.ConnectionStringSecretOutput = new BicepSecretOutputReference("connectionString", azureResource);
+        azureResource.ConnectionStringSecretOutput = keyVaultBuilder.Resource.GetSecret(
+            $"connectionstrings--{azureResource.Name}");
+
+        builder.WithParameter(AzureBicepResource.KnownParameters.KeyVaultName, keyVaultBuilder.Resource.NameOutputReference);
+
+        // remove role assignment annotations when using access key authentication so an empty roles bicep module isn't generated
+        var roleAssignmentAnnotations = azureResource.Annotations.OfType<DefaultRoleAssignmentsAnnotation>().ToArray();
+        foreach (var annotation in roleAssignmentAnnotations)
+        {
+            azureResource.Annotations.Remove(annotation);
+        }
 
         return builder;
     }
@@ -408,41 +461,71 @@ public static class AzureCosmosExtensions
             var secret = new KeyVaultSecret("connectionString")
             {
                 Parent = keyVault,
-                Name = "connectionString",
+                Name = $"connectionstrings--{azureResource.Name}",
                 Properties = new SecretProperties
                 {
                     Value = BicepFunction.Interpolate($"AccountEndpoint={cosmosAccount.DocumentEndpoint};AccountKey={cosmosAccount.GetKeys().PrimaryMasterKey}")
                 }
             };
             infrastructure.Add(secret);
+
+            foreach (var database in azureResource.Databases)
+            {
+                var dbSecret = new KeyVaultSecret(Infrastructure.NormalizeBicepIdentifier(database.Name + "_connectionString"))
+                {
+                    Parent = keyVault,
+                    Name = AzureCosmosDBResource.GetKeyValueSecretName(database.Name),
+                    Properties = new SecretProperties
+                    {
+                        Value = BicepFunction.Interpolate($"AccountEndpoint={cosmosAccount.DocumentEndpoint};AccountKey={cosmosAccount.GetKeys().PrimaryMasterKey};Database={database.DatabaseName}")
+                    }
+                };
+                infrastructure.Add(dbSecret);
+
+                foreach (var container in database.Containers)
+                {
+                    var containerSecret = new KeyVaultSecret(Infrastructure.NormalizeBicepIdentifier(container.Name + "_connectionString"))
+                    {
+                        Parent = keyVault,
+                        Name = AzureCosmosDBResource.GetKeyValueSecretName(container.Name),
+                        Properties = new SecretProperties
+                        {
+                            Value = BicepFunction.Interpolate($"AccountEndpoint={cosmosAccount.DocumentEndpoint};AccountKey={cosmosAccount.GetKeys().PrimaryMasterKey};Database={database.DatabaseName};Container={container.ContainerName}")
+                        }
+                    };
+                    infrastructure.Add(containerSecret);
+                }
+            }
         }
         else
         {
-            var principalTypeParameter = new ProvisioningParameter(AzureBicepResource.KnownParameters.PrincipalType, typeof(string));
-            infrastructure.Add(principalTypeParameter);
-
-            var principalIdParameter = new ProvisioningParameter(AzureBicepResource.KnownParameters.PrincipalId, typeof(string));
-            infrastructure.Add(principalIdParameter);
-
-            var roleDefinition = CosmosDBSqlRoleDefinition_Derived.FromExisting(cosmosAccount.BicepIdentifier + "_roleDefinition");
-            roleDefinition.Parent = cosmosAccount;
-            roleDefinition.NameOverride = "00000000-0000-0000-0000-000000000002"; // data plane contributor role
-            infrastructure.Add(roleDefinition);
-
-            infrastructure.Add(new CosmosDBSqlRoleAssignment_Derived(cosmosAccount.BicepIdentifier + "_roleAssignment")
-            {
-                NameOverride = BicepFunction.CreateGuid(principalIdParameter, roleDefinition.Id, cosmosAccount.Id),
-                Parent = cosmosAccount,
-                Scope = cosmosAccount.Id,
-                RoleDefinitionId = roleDefinition.Id,
-                PrincipalId = principalIdParameter
-            });
+            // use managed identity
 
             infrastructure.Add(new ProvisioningOutput("connectionString", typeof(string))
             {
                 Value = cosmosAccount.DocumentEndpoint
             });
         }
+
+        // We need to output name to externalize role assignments.
+        infrastructure.Add(new ProvisioningOutput("name", typeof(string)) { Value = cosmosAccount.Name });
+    }
+
+    internal static void AddContributorRoleAssignment(AzureResourceInfrastructure infra, CosmosDBAccount cosmosAccount, BicepValue<Guid> principalId)
+    {
+        var roleDefinition = CosmosDBSqlRoleDefinition_Derived.FromExisting(cosmosAccount.BicepIdentifier + "_roleDefinition");
+        roleDefinition.Parent = cosmosAccount;
+        roleDefinition.NameOverride = "00000000-0000-0000-0000-000000000002"; // data plane contributor role
+        infra.Add(roleDefinition);
+
+        infra.Add(new CosmosDBSqlRoleAssignment_Derived(cosmosAccount.BicepIdentifier + "_roleAssignment")
+        {
+            NameOverride = BicepFunction.CreateGuid(principalId, roleDefinition.Id, cosmosAccount.Id),
+            Parent = cosmosAccount,
+            Scope = cosmosAccount.Id,
+            RoleDefinitionId = roleDefinition.Id,
+            PrincipalId = principalId
+        });
     }
 }
 

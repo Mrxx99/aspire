@@ -1,37 +1,36 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-// using Aspire.Hosting.Azure;
-// using Aspire.Hosting.Kubernetes;
-using Aspire.Hosting.Azure;
-using Aspire.Hosting.Docker;
-using Aspire.Hosting.Kubernetes;
+#pragma warning disable ASPIRECOMPUTE001
+#pragma warning disable ASPIREAZURE001
+#pragma warning disable ASPIREPUBLISHERS001
+
+using Microsoft.Extensions.Configuration;
 
 var builder = DistributedApplication.CreateBuilder(args);
+builder.Configuration.AddCommandLine(args, new Dictionary<string, string> { ["--target"] = "Deployment:Target" });
 
-builder.AddDockerCompose("docker-compose", options => {
-    options.DefaultContainerRegistry = "override.azurecr.io";
-    // Do stuff here.
-});
+var target = builder.Configuration["Deployment:Target"];
+var publisher = builder.ExecutionContext.PublisherName;
 
-builder.AddKubernetes("k8s", options => {
-    // Do stuff here.
-});
+IResourceBuilder<IComputeEnvironmentResource>? environment = (publisher, target) switch
+{
+    ("default", "kube") => builder.AddKubernetesEnvironment("env"),
+    ("default", "azure") => builder.AddAzureContainerAppEnvironment("env"),
+    ("default", _) => builder.AddDockerComposeEnvironment("env"),
+    _ => null
+};
 
-builder.AddAzureContainerApps("aca", options => {
-    // Do stuff here.
-});
+var param0 = builder.AddParameter("param0");
+var param1 = builder.AddParameter("param1", secret: true);
+var param2 = builder.AddParameter("param2", "default", publishValueAsDefault: true);
+var param3 = builder.AddParameter("param3", "default"); // Runtime only default value.
 
-var db = builder.AddAzurePostgresFlexibleServer("pg")
-                .WithPasswordAuthentication()
-                .RunAsContainer(c =>
-                {
-                    c.WithPgAdmin(c =>
-                    {
-                        c.WithHostPort(15551);
-                    });
-                })
-                .AddDatabase("db");
+var azpgdb = builder.AddAzurePostgresFlexibleServer("azpg")
+                    .RunAsContainer()
+                    .AddDatabase("azdb");
+
+var db = builder.AddPostgres("pg").AddDatabase("db");
 
 var dbsetup = builder.AddProject<Projects.Publishers_DbSetup>("dbsetup")
                      .WithReference(db).WaitFor(db);
@@ -40,11 +39,25 @@ var backend = builder.AddProject<Projects.Publishers_ApiService>("api")
                      .WithExternalHttpEndpoints()
                      .WithHttpHealthCheck("/health")
                      .WithReference(db).WaitFor(db)
+                     .WithReference(azpgdb).WaitFor(azpgdb)
                      .WaitForCompletion(dbsetup)
                      .WithReplicas(2);
 
+// need a container to test.
+var sqlServer = builder.AddSqlServer("sqlserver")
+        .WithDataVolume("sqlserver-data");
+
+var sqlDb = sqlServer.AddDatabase("sqldb");
+
 builder.AddProject<Projects.Publishers_Frontend>("frontend")
+       .WithReference(sqlDb)
+       .WithEnvironment("P0", param0)
+       .WithEnvironment("P1", param1)
+       .WithEnvironment("P2", param2)
+       .WithEnvironment("P3", param3)
        .WithReference(backend).WaitFor(backend);
+
+builder.AddDockerfile("mycontainer", "qots");
 
 #if !SKIP_DASHBOARD_REFERENCE
 // This project is only added in playground projects to support development/debugging

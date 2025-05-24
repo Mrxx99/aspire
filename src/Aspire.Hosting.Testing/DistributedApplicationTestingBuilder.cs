@@ -307,7 +307,7 @@ public static class DistributedApplicationTestingBuilder
                 DistributedApplicationFactory.ConfigureBuilder(args, applicationOptions, hostBuilderOptions, FindApplicationAssembly(), configureBuilder);
             });
 
-            if (!builder.Configuration.GetValue("ASPIRE_TESTING_DISABLE_HTTP_CLIENT", false))
+            if (!builder.Configuration.GetValue(KnownConfigNames.TestingDisableHttpClient, false))
             {
                 builder.Services.AddHttpClient();
                 builder.Services.ConfigureHttpClientDefaults(http => http.AddStandardResilienceHandler());
@@ -329,7 +329,7 @@ public static class DistributedApplicationTestingBuilder
                     }
                 }
 
-                throw new InvalidOperationException("No application host assembly was found. Ensure that your project references 'Aspire.Hosting.AppHost'.");
+                throw new InvalidOperationException("No application host assembly was found. Ensure that you have a project that references the 'Aspire.Hosting.AppHost' package and imports the 'Aspire.AppHost.Sdk' SDK.");
             }
 
             static string? GetDcpCliPath(Assembly? assembly)

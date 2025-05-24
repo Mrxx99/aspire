@@ -3,18 +3,16 @@
 
 using System.Text;
 using System.Text.Json.Nodes;
-using Aspire.Components.Common.Tests;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure.EventHubs;
 using Aspire.Hosting.Utils;
+using Aspire.TestUtilities;
 using Azure.Messaging.EventHubs;
 using Azure.Messaging.EventHubs.Consumer;
 using Azure.Messaging.EventHubs.Producer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
-using Xunit;
-using Xunit.Abstractions;
 
 namespace Aspire.Hosting.Azure.Tests;
 
@@ -22,7 +20,6 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
 {
     [Fact]
     [RequiresDocker]
-    [ActiveIssue("https://github.com/dotnet/aspire/issues/7175")]
     public async Task VerifyWaitForOnEventHubsEmulatorBlocksDependentResources()
     {
         var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
@@ -46,17 +43,14 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
 
         var pendingStart = app.StartAsync(cts.Token);
 
-        var rns = app.Services.GetRequiredService<ResourceNotificationService>();
-
-        await rns.WaitForResourceAsync(resource.Resource.Name, KnownResourceStates.Running, cts.Token);
-
-        await rns.WaitForResourceAsync(dependentResource.Resource.Name, KnownResourceStates.Waiting, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(resource.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(dependentResource.Resource.Name, KnownResourceStates.Waiting, cts.Token);
 
         healthCheckTcs.SetResult(HealthCheckResult.Healthy());
 
-        await rns.WaitForResourceHealthyAsync(resource.Resource.Name, cts.Token);
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(resource.Resource.Name, cts.Token);
 
-        await rns.WaitForResourceAsync(dependentResource.Resource.Name, KnownResourceStates.Running, cts.Token);
+        await app.ResourceNotifications.WaitForResourceAsync(dependentResource.Resource.Name, KnownResourceStates.Running, cts.Token);
 
         await pendingStart;
 
@@ -64,19 +58,22 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
+    [InlineData(true, null)]
+    [InlineData(false, "random")]
     [RequiresDocker]
-    [ActiveIssue("https://github.com/dotnet/aspire/issues/6751")]
-    public async Task VerifyAzureEventHubsEmulatorResource(bool referenceHub)
+    public async Task VerifyAzureEventHubsEmulatorResource(bool referenceHub, string? hubName)
     {
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         using var builder = TestDistributedApplicationBuilder.Create().WithTestAndResourceLogging(testOutputHelper);
         var eventHubns = builder.AddAzureEventHubs("eventhubns")
             .RunAsEmulator();
-        var eventHub = eventHubns.AddHub("hub");
+        var resourceName = "hub";
+        var eventHub = eventHubns.AddHub(resourceName, hubName);
 
         using var app = builder.Build();
         await app.StartAsync();
+
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(eventHubns.Resource.Name, cts.Token);
 
         var hb = Host.CreateApplicationBuilder();
 
@@ -89,8 +86,8 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         else
         {
             hb.Configuration["ConnectionStrings:eventhubns"] = await eventHubns.Resource.ConnectionStringExpression.GetValueAsync(CancellationToken.None);
-            hb.AddAzureEventHubProducerClient("eventhubns", settings => settings.EventHubName = "hub");
-            hb.AddAzureEventHubConsumerClient("eventhubns", settings => settings.EventHubName = "hub");
+            hb.AddAzureEventHubProducerClient("eventhubns", settings => settings.EventHubName = eventHub.Resource.HubName);
+            hb.AddAzureEventHubConsumerClient("eventhubns", settings => settings.EventHubName = eventHub.Resource.HubName);
         }
 
         using var host = hb.Build();
@@ -110,44 +107,48 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         }
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     [RequiresDocker]
-    public async Task AzureEventHubsNs_ProducesAndConsumes()
+    public async Task AzureEventHubsHealthChecksUsesSettingsEventHubName(bool useSettings)
     {
-        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+        const string hubName = "myhub";
 
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         using var builder = TestDistributedApplicationBuilder.Create().WithTestAndResourceLogging(testOutputHelper);
         var eventHubns = builder.AddAzureEventHubs("eventhubns")
             .RunAsEmulator();
-        var eventHub = eventHubns.AddHub("hub");
+        var resourceName = "hub";
+        var eventHub = eventHubns.AddHub(resourceName, hubName);
 
         using var app = builder.Build();
         await app.StartAsync();
 
+        await app.ResourceNotifications.WaitForResourceHealthyAsync(eventHubns.Resource.Name, cts.Token);
+
         var hb = Host.CreateApplicationBuilder();
 
-        hb.Configuration["ConnectionStrings:eventhubns"] = await eventHubns.Resource.ConnectionStringExpression.GetValueAsync(CancellationToken.None);
-        hb.AddAzureEventHubProducerClient("eventhubns", settings => settings.EventHubName = "hub");
-        hb.AddAzureEventHubConsumerClient("eventhubns", settings => settings.EventHubName = "hub");
+        if (useSettings)
+        {
+            hb.Configuration["ConnectionStrings:eventhubns"] = await eventHubns.Resource.ConnectionStringExpression.GetValueAsync(CancellationToken.None);
+            hb.AddAzureEventHubProducerClient("eventhubns", settings => settings.EventHubName = eventHub.Resource.HubName);
+            hb.AddAzureEventHubConsumerClient("eventhubns", settings => settings.EventHubName = eventHub.Resource.HubName);
+        }
+        else
+        {
+            hb.Configuration["ConnectionStrings:eventhubns"] = await eventHubns.Resource.ConnectionStringExpression.GetValueAsync(CancellationToken.None) + $";EntityPath={hubName};";
+            hb.AddAzureEventHubProducerClient("eventhubns");
+            hb.AddAzureEventHubConsumerClient("eventhubns");
+        }
 
         using var host = hb.Build();
         await host.StartAsync();
 
-        var rns = app.Services.GetRequiredService<ResourceNotificationService>();
-        await rns.WaitForResourceHealthyAsync(eventHubns.Resource.Name, cts.Token);
+        var healthCheckService = host.Services.GetRequiredService<HealthCheckService>();
+        var healthCheckReport = await healthCheckService.CheckHealthAsync();
 
-        var producerClient = host.Services.GetRequiredService<EventHubProducerClient>();
-        var consumerClient = host.Services.GetRequiredService<EventHubConsumerClient>();
-
-        // If no exception is thrown when awaited, the Event Hubs service has acknowledged
-        // receipt and assumed responsibility for delivery of the set of events to its partition.
-        await producerClient.SendAsync([new EventData(Encoding.UTF8.GetBytes("hello worlds"))], cts.Token);
-
-        await foreach (var partitionEvent in consumerClient.ReadEventsAsync(new ReadEventOptions { MaximumWaitTime = TimeSpan.FromSeconds(5) }))
-        {
-            Assert.Equal("hello worlds", Encoding.UTF8.GetString(partitionEvent.Data.EventBody.ToArray()));
-            break;
-        }
+        Assert.Equal(HealthStatus.Healthy, healthCheckReport.Status);
     }
 
     [Fact]
@@ -156,7 +157,9 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         using var builder = TestDistributedApplicationBuilder.Create();
         var eventHubs = builder.AddAzureEventHubs("eh").RunAsEmulator(configureContainer: builder =>
         {
+#pragma warning disable CS0618 // Type or member is obsolete
             builder.WithDataBindMount();
+#pragma warning restore CS0618 // Type or member is obsolete
         });
 
         // Ignoring the annotation created for the custom Config.json file
@@ -173,7 +176,9 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         using var builder = TestDistributedApplicationBuilder.Create();
         var eventHubs = builder.AddAzureEventHubs("eh").RunAsEmulator(configureContainer: builder =>
         {
+#pragma warning disable CS0618 // Type or member is obsolete
             builder.WithDataBindMount("mydata");
+#pragma warning restore CS0618 // Type or member is obsolete
         });
 
         // Ignoring the annotation created for the custom Config.json file
@@ -190,7 +195,9 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         using var builder = TestDistributedApplicationBuilder.Create();
         var eventHubs = builder.AddAzureEventHubs("eh").RunAsEmulator(configureContainer: builder =>
         {
+#pragma warning disable CS0618 // Type or member is obsolete
             builder.WithDataVolume();
+#pragma warning restore CS0618 // Type or member is obsolete
         });
 
         // Ignoring the annotation created for the custom Config.json file
@@ -207,7 +214,9 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         using var builder = TestDistributedApplicationBuilder.Create();
         var eventHubs = builder.AddAzureEventHubs("eh").RunAsEmulator(configureContainer: builder =>
         {
+#pragma warning disable CS0618 // Type or member is obsolete
             builder.WithDataVolume("mydata");
+#pragma warning restore CS0618 // Type or member is obsolete
         });
 
         // Ignoring the annotation created for the custom Config.json file
@@ -230,10 +239,15 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
             builder.WithHostPort(port);
         });
 
-        Assert.Collection(
-            eventHubs.Resource.Annotations.OfType<EndpointAnnotation>(),
-            e => Assert.Equal(port, e.Port)
-            );
+        var endpoints = eventHubs.Resource.Annotations.OfType<EndpointAnnotation>().ToList();
+
+        Assert.Equal(2, endpoints.Count);
+
+        Assert.Equal("emulator", endpoints[0].Name);
+        Assert.Equal(port, endpoints[0].Port);
+
+        Assert.Equal("emulatorhealth", endpoints[1].Name);
+        Assert.Null(endpoints[1].Port);
     }
 
     [Theory]
@@ -271,56 +285,18 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
             .WithProperties(hub => hub.PartitionCount = 3)
             .AddConsumerGroup("cg1", "group-name");
 
-        var manifest = await AzureManifestUtils.GetManifestWithBicep(eventHubs.Resource);
+        using var app = builder.Build();
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var (manifest, bicep) = await AzureManifestUtils.GetManifestWithBicep(model, eventHubs.Resource);
 
-        var expectedBicep = """
-            @description('The location for the resource(s) to be deployed.')
-            param location string = resourceGroup().location
+        var ehRoles = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "eh-roles");
+        var (ehRolesManifest, ehRolesBicep) = await AzureManifestUtils.GetManifestWithBicep(ehRoles, skipPreparer: true);
 
-            param sku string = 'Standard'
-
-            param principalType string
-
-            param principalId string
-
-            resource eh 'Microsoft.EventHub/namespaces@2024-01-01' = {
-              name: take('eh-${uniqueString(resourceGroup().id)}', 256)
-              location: location
-              sku: {
-                name: sku
-              }
-              tags: {
-                'aspire-resource-name': 'eh'
-              }
-            }
-
-            resource eh_AzureEventHubsDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-              name: guid(eh.id, principalId, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f526a384-b230-433a-b45c-95f59c4a2dec'))
-              properties: {
-                principalId: principalId
-                roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f526a384-b230-433a-b45c-95f59c4a2dec')
-                principalType: principalType
-              }
-              scope: eh
-            }
-
-            resource hub_resource 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
-              name: 'hub-name'
-              properties: {
-                partitionCount: 3
-              }
-              parent: eh
-            }
-
-            resource cg1 'Microsoft.EventHub/namespaces/eventhubs/consumergroups@2024-01-01' = {
-              name: 'group-name'
-              parent: hub_resource
-            }
-
-            output eventHubsEndpoint string = eh.properties.serviceBusEndpoint
-            """;
-
-        Assert.Equal(expectedBicep, manifest.BicepText);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep")
+              .AppendContentAsFile(ehRolesManifest.ToString(), "json")
+              .AppendContentAsFile(ehRolesBicep, "bicep");
+              
     }
 
     [Fact]
@@ -371,9 +347,12 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         await app.StartAsync();
 
         var eventHubsEmulatorResource = builder.Resources.OfType<AzureEventHubsResource>().Single(x => x is { } eventHubsResource && eventHubsResource.IsEmulator);
-        var volumeAnnotation = eventHubsEmulatorResource.Annotations.OfType<ContainerMountAnnotation>().Single();
+        var configAnnotation = eventHubsEmulatorResource.Annotations.OfType<ContainerFileSystemCallbackAnnotation>().Single();
 
-        var configJsonContent = File.ReadAllText(volumeAnnotation.Source!);
+        Assert.Equal("/Eventhubs_Emulator/ConfigFiles", configAnnotation.DestinationPath);
+        var configFiles = await configAnnotation.Callback(new ContainerFileSystemCallbackContext { Model = eventHubsEmulatorResource, ServiceProvider = app.Services }, CancellationToken.None);
+        var configFile = Assert.IsType<ContainerFile>(Assert.Single(configFiles));
+        Assert.Equal("Config.json", configFile.Name);
 
         Assert.Equal(/*json*/"""
         {
@@ -400,7 +379,7 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
             }
           }
         }
-        """, configJsonContent);
+        """, configFile.Contents);
 
         await app.StopAsync();
     }
@@ -429,19 +408,12 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         await app.StartAsync();
 
         var eventHubsEmulatorResource = builder.Resources.OfType<AzureEventHubsResource>().Single(x => x is { } eventHubsResource && eventHubsResource.IsEmulator);
-        var volumeAnnotation = eventHubsEmulatorResource.Annotations.OfType<ContainerMountAnnotation>().Single();
+        var configAnnotation = eventHubsEmulatorResource.Annotations.OfType<ContainerFileSystemCallbackAnnotation>().Single();
 
-        var configJsonContent = File.ReadAllText(volumeAnnotation.Source!);
-
-        if (!OperatingSystem.IsWindows())
-        {
-            // Ensure the configuration file has correct attributes
-            var fileInfo = new FileInfo(volumeAnnotation.Source!);
-
-            var expectedUnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
-
-            Assert.True(fileInfo.UnixFileMode.HasFlag(expectedUnixFileMode));
-        }
+        Assert.Equal("/Eventhubs_Emulator/ConfigFiles", configAnnotation.DestinationPath);
+        var configFiles = await configAnnotation.Callback(new ContainerFileSystemCallbackContext { Model = eventHubsEmulatorResource, ServiceProvider = app.Services }, CancellationToken.None);
+        var configFile = Assert.IsType<ContainerFile>(Assert.Single(configFiles));
+        Assert.Equal("Config.json", configFile.Name);
 
         Assert.Equal(/*json*/"""
         {
@@ -465,7 +437,7 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
           },
           "Custom": 42
         }
-        """, configJsonContent);
+        """, configFile.Contents);
 
         await app.StopAsync();
     }
@@ -510,13 +482,13 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
         await app.StartAsync();
 
         var eventHubsEmulatorResource = builder.Resources.OfType<AzureEventHubsResource>().Single(x => x is { } eventHubsResource && eventHubsResource.IsEmulator);
-        var volumeAnnotation = eventHubsEmulatorResource.Annotations.OfType<ContainerMountAnnotation>().Single();
+        var configAnnotation = eventHubsEmulatorResource.Annotations.OfType<ContainerFileSystemCallbackAnnotation>().Single();
 
-        var configJsonContent = File.ReadAllText(volumeAnnotation.Source!);
-
-        Assert.Equal("/Eventhubs_Emulator/ConfigFiles/Config.json", volumeAnnotation.Target);
-
-        Assert.Equal(source, configJsonContent);
+        Assert.Equal("/Eventhubs_Emulator/ConfigFiles", configAnnotation.DestinationPath);
+        var configFiles = await configAnnotation.Callback(new ContainerFileSystemCallbackContext { Model = eventHubsEmulatorResource, ServiceProvider = app.Services }, CancellationToken.None);
+        var configFile = Assert.IsType<ContainerFile>(Assert.Single(configFiles));
+        Assert.Equal("Config.json", configFile.Name);
+        Assert.Equal(configJsonPath, configFile.SourcePath);
 
         await app.StopAsync();
 
@@ -557,9 +529,9 @@ public class AzureEventHubsExtensionsTests(ITestOutputHelper testOutputHelper)
     public void RunAsEmulator_CalledTwice_Throws()
     {
         using var builder = TestDistributedApplicationBuilder.Create();
-        var serviceBus = builder.AddAzureEventHubs("eh").RunAsEmulator();
+        var eventHubs = builder.AddAzureEventHubs("eh").RunAsEmulator();
 
-        Assert.Throws<InvalidOperationException>(() => serviceBus.RunAsEmulator());
+        Assert.Throws<InvalidOperationException>(() => eventHubs.RunAsEmulator());
     }
 
     [Fact]

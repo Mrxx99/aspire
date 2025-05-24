@@ -4,7 +4,6 @@
 using System.Text.Json.Nodes;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Utils;
-using Xunit;
 
 namespace Aspire.Hosting.Azure.Tests.PublicApiTests;
 
@@ -277,7 +276,9 @@ public class EventHubsPublicApiTests
     {
         IResourceBuilder<AzureEventHubsEmulatorResource> builder = null!;
 
+#pragma warning disable CS0618 // Type or member is obsolete
         var action = () => builder.WithDataBindMount();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         var exception = Assert.Throws<ArgumentNullException>(action);
         Assert.Equal(nameof(builder), exception.ParamName);
@@ -288,7 +289,9 @@ public class EventHubsPublicApiTests
     {
         IResourceBuilder<AzureEventHubsEmulatorResource> builder = null!;
 
+#pragma warning disable CS0618 // Type or member is obsolete
         var action = () => builder.WithDataVolume();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         var exception = Assert.Throws<ArgumentNullException>(action);
         Assert.Equal(nameof(builder), exception.ParamName);

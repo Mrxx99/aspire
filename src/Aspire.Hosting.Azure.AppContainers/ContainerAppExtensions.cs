@@ -37,7 +37,6 @@ public static class ContainerAppExtensions
     /// <paramref name="certificateName"/> is prompted.</para>
     /// <para>For deployments triggered locally by the Azure Developer CLI the <c>config.json</c> file in the <c>.azure/{environment name}</c> path
     /// can by modified with the certificate name since Azure Developer CLI will not prompt again for the value.</para>
-    /// </remarks>
     /// <example>
     /// This example shows declaring two parameters to capture the custom domain and certificate name and
     /// passing them to the <see cref="ConfigureCustomDomain(ContainerApp, IResourceBuilder{ParameterResource}, IResourceBuilder{ParameterResource})"/>
@@ -54,7 +53,8 @@ public static class ContainerAppExtensions
     ///        });
     /// </code>
     /// </example>
-    [Experimental("ASPIREACADOMAINS001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+    /// </remarks>
+    [Experimental("ASPIREACADOMAINS001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static void ConfigureCustomDomain(this ContainerApp app, IResourceBuilder<ParameterResource> customDomain, IResourceBuilder<ParameterResource> certificateName)
     {
         ArgumentNullException.ThrowIfNull(app);
@@ -66,8 +66,7 @@ public static class ContainerAppExtensions
             throw new ArgumentException("Cannot configure custom domain when resource is not parented by ResourceModuleConstruct.", nameof(app));
         }
 
-        var containerAppManagedEnvironmentIdParameter = module.GetProvisionableResources().OfType<ProvisioningParameter>().Single(
-            p => p.BicepIdentifier == "outputs_azure_container_apps_environment_id");
+        var containerAppManagedEnvironmentId = app.EnvironmentId;
         var certificateNameParameter = certificateName.AsProvisioningParameter(module);
         var customDomainParameter = customDomain.AsProvisioningParameter(module);
 
@@ -87,7 +86,7 @@ public static class ContainerAppExtensions
                 new StringLiteralExpression(string.Empty)),
             new InterpolatedStringExpression(
                 [
-                    new IdentifierExpression(containerAppManagedEnvironmentIdParameter.BicepIdentifier),
+                    containerAppManagedEnvironmentId.Compile(),
                     new StringLiteralExpression("/managedCertificates/"),
                     new IdentifierExpression(certificateNameParameter.BicepIdentifier)
                  ]),

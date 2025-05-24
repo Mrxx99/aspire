@@ -61,24 +61,6 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Endpoints.
-        /// </summary>
-        public static string EndpointsColumnDisplayOverflowTitle {
-            get {
-                return ResourceManager.GetString("EndpointsColumnDisplayOverflowTitle", resourceCulture);
-            }
-        }
-        
-        /// <summary>
-        ///   Looks up a localized string similar to Starting....
-        /// </summary>
-        public static string EndpointsColumnDisplayPlaceholder {
-            get {
-                return ResourceManager.GetString("EndpointsColumnDisplayPlaceholder", resourceCulture);
-            }
-        }
-        
-        /// <summary>
         ///   Looks up a localized string similar to This container is persistent and won&apos;t be stopped when the app host is shut down..
         /// </summary>
         public static string PersistentContainerIconTooltip {
@@ -115,7 +97,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Resource is running but not in a healthy state. Click for details..
+        ///   Looks up a localized string similar to Resource is running but not in a healthy state..
         /// </summary>
         public static string RunningAndUnhealthyResourceStateToolTip {
             get {
@@ -233,6 +215,24 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Resource has not started because it&apos;s configured to not automatically start..
+        /// </summary>
+        public static string StateColumnResourceNotStarted {
+            get {
+                return ResourceManager.GetString("StateColumnResourceNotStarted", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Resource is waiting for other resources to be in a running and healthy state..
+        /// </summary>
+        public static string StateColumnResourceWaiting {
+            get {
+                return ResourceManager.GetString("StateColumnResourceWaiting", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Unknown.
         /// </summary>
         public static string UnknownStateLabel {
@@ -256,6 +256,24 @@ namespace Aspire.Dashboard.Resources {
         public static string UnreadLogErrorsBadgeOneErrorLog {
             get {
                 return ResourceManager.GetString("UnreadLogErrorsBadgeOneErrorLog", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to URLs.
+        /// </summary>
+        public static string UrlsColumnDisplayOverflowTitle {
+            get {
+                return ResourceManager.GetString("UrlsColumnDisplayOverflowTitle", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Starting....
+        /// </summary>
+        public static string UrlsColumnDisplayPlaceholder {
+            get {
+                return ResourceManager.GetString("UrlsColumnDisplayPlaceholder", resourceCulture);
             }
         }
     }

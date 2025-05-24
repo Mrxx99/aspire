@@ -2,29 +2,32 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREACADOMAINS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIRECOMPUTE001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
-using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Azure.AppContainers;
 using Aspire.Hosting.Utils;
 using Azure.Provisioning;
 using Azure.Provisioning.AppContainers;
+using Azure.Provisioning.KeyVault;
 using Azure.Provisioning.Primitives;
 using Azure.Provisioning.Storage;
 using Microsoft.Extensions.DependencyInjection;
-using Xunit;
-using Xunit.Abstractions;
+using static Aspire.Hosting.Utils.AzureManifestUtils;
 
 namespace Aspire.Hosting.Azure.Tests;
 
-public class AzureContainerAppsTests(ITestOutputHelper output)
+public class AzureContainerAppsTests
 {
     [Fact]
     public async Task AddContainerAppsInfrastructureAddsDeploymentTargetWithContainerAppToContainerResources()
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
+#pragma warning disable CS0618 // Type or member is obsolete
         builder.AddAzureContainerAppsInfrastructure();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         builder.AddContainer("api", "myimage");
 
@@ -44,61 +47,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -106,7 +56,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         var directory = Directory.CreateTempSubdirectory(".aspire-test");
 
@@ -131,81 +81,16 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-            "api_containerimage": "{api.containerImage}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param outputs_azure_container_registry_endpoint string
-
-        param api_containerimage string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              registries: [
-                {
-                  server: outputs_azure_container_registry_endpoint
-                  identity: outputs_azure_container_registry_managed_identity_id
-                }
-              ]
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: api_containerimage
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
-    public async Task AddContainerAppsInfrastructureAddsDeploymentTargetWithContainerAppToProjectResources()
+    public async Task AddContainerAppEnvironmentAddsDeploymentTargetWithContainerAppToProjectResources()
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        var env = builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddProject<Project>("api", launchProfileName: null)
             .WithHttpEndpoint();
@@ -216,113 +101,20 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-        var container = Assert.Single(model.GetProjectResources());
+        var container = Assert.IsType<IComputeResource>(Assert.Single(model.GetProjectResources()), exactMatch: false);
 
-        container.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
+        var target = container.GetDeploymentTargetAnnotation();
+
+        Assert.NotNull(target);
+        Assert.Same(env.Resource, target.ComputeEnvironment);
 
         var resource = target?.DeploymentTarget as AzureProvisioningResource;
-
         Assert.NotNull(resource);
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "api_containerport": "{api.containerPort}",
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-            "api_containerimage": "{api.containerImage}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param api_containerport string
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param outputs_azure_container_registry_endpoint string
-
-        param api_containerimage string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: api_containerport
-                transport: 'http'
-              }
-              registries: [
-                {
-                  server: outputs_azure_container_registry_endpoint
-                  identity: outputs_azure_container_registry_managed_identity_id
-                }
-              ]
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: api_containerimage
-                  name: 'api'
-                  env: [
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES'
-                      value: 'true'
-                    }
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES'
-                      value: 'true'
-                    }
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY'
-                      value: 'in_memory'
-                    }
-                    {
-                      name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED'
-                      value: 'true'
-                    }
-                    {
-                      name: 'HTTP_PORTS'
-                      value: api_containerport
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -330,7 +122,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        var infra = builder.AddAzureContainerAppEnvironment("infra");
 
         var env = builder.AddParameter("env");
 
@@ -351,92 +143,20 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-        var container = Assert.Single(model.GetContainerResources());
+        var container = Assert.IsType<IComputeResource>(Assert.Single(model.GetContainerResources()), exactMatch: false);
 
-        container.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
+        var target = container.GetDeploymentTargetAnnotation();
 
-        var resource = target?.DeploymentTarget as AzureProvisioningResource;
+        Assert.NotNull(target);
+        Assert.Same(infra.Resource, target.ComputeEnvironment);
 
+        var resource = target.DeploymentTarget as AzureProvisioningResource;
         Assert.NotNull(resource);
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-            "api_containerimage": "{api.containerImage}",
-            "env": "{env.value}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param outputs_azure_container_registry_endpoint string
-
-        param api_containerimage string
-
-        param env string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              registries: [
-                {
-                  server: outputs_azure_container_registry_endpoint
-                  identity: outputs_azure_container_registry_managed_identity_id
-                }
-              ]
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: api_containerimage
-                  name: 'api'
-                  env: [
-                    {
-                      name: 'Hello'
-                      value: env
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -444,7 +164,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        var env = builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddExecutable("api", "node.exe", Environment.CurrentDirectory)
                .PublishAsDockerFile();
@@ -457,81 +177,17 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var container = Assert.Single(model.GetContainerResources());
 
-        container.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
+        var target = container.GetDeploymentTargetAnnotation();
+
+        Assert.Same(env.Resource, target?.ComputeEnvironment);
 
         var resource = target?.DeploymentTarget as AzureProvisioningResource;
-
         Assert.NotNull(resource);
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-            "api_containerimage": "{api.containerImage}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param outputs_azure_container_registry_endpoint string
-
-        param api_containerimage string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              registries: [
-                {
-                  server: outputs_azure_container_registry_endpoint
-                  identity: outputs_azure_container_registry_managed_identity_id
-                }
-              ]
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: api_containerimage
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -539,7 +195,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         var value = builder.AddParameter("value");
         var minReplicas = builder.AddParameter("minReplicas");
@@ -572,74 +228,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "value": "{value.value}",
-            "minReplicas": "{minReplicas.value}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param value string
-
-        param minReplicas string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                  env: [
-                    {
-                      name: 'Parameter'
-                      value: value
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: minReplicas
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -647,7 +237,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
                .WithEntrypoint("/bin/sh")
@@ -668,53 +258,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                  command: [
-                    '/bin/sh'
-                  ]
-                  args: [
-                    'my'
-                    'args with space'
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -722,9 +267,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
-        // CosmosDB uses secret outputs
         var db = builder.AddAzureCosmosDB("mydb");
         db.AddCosmosDatabase("cosmosdb", databaseName: "db");
 
@@ -733,7 +277,6 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var rawCs = builder.AddConnectionString("cs");
 
-        // Connection string (should be considered a secret)
         var blob = builder.AddAzureStorage("storage").AddBlobs("blobs");
 
         // Secret parameters (_ isn't supported and will be replaced by -)
@@ -778,8 +321,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
         var proj = Assert.Single(model.GetProjectResources());
-        var rolesName = $"{proj.Name}-roles";
-        var projRoles = Assert.Single(model.Resources.OfType<AzureProvisioningResource>().Where(r => r.Name == rolesName));
+        var identityName = $"{proj.Name}-identity";
+        var projIdentity = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == identityName);
 
         proj.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
 
@@ -788,310 +331,182 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         Assert.NotNull(resource);
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
-        var (rolesManifest, rolesBicep) = await GetManifestWithBicep(projRoles);
+        var (identityManifest, identityBicep) = await GetManifestWithBicep(projIdentity);
 
-        var m = manifest.ToString();
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep")
+              .AppendContentAsFile(identityManifest.ToString(), "json")
+              .AppendContentAsFile(identityBicep, "bicep");
+    }
 
-        var expectedManifest =
-        """
+    [Fact]
+    public async Task ProjectWithManyReferenceTypesAndContainerAppEnvironment()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        builder.AddAzureContainerAppEnvironment("cae");
+
+        var db = builder.AddAzureCosmosDB("mydb");
+        db.AddCosmosDatabase("cosmosdb", databaseName: "db");
+
+        // Postgres uses secret outputs + a literal connection string
+        var pgdb = builder.AddAzurePostgresFlexibleServer("pg").WithPasswordAuthentication().AddDatabase("db");
+
+        var rawCs = builder.AddConnectionString("cs");
+
+        var blob = builder.AddAzureStorage("storage").AddBlobs("blobs");
+
+        // Secret parameters (_ isn't supported and will be replaced by -)
+        var secretValue = builder.AddParameter("value0", "x", secret: true);
+
+        // Normal parameters
+        var value = builder.AddParameter("value1", "y");
+
+        var project = builder.AddProject<Project>("api", launchProfileName: null)
+            .WithHttpEndpoint()
+            .WithHttpsEndpoint()
+            .WithHttpEndpoint(name: "internal")
+            .WithReference(db)
+            .WithReference(blob)
+            .WithReference(pgdb)
+            .WithEnvironment("SecretVal", secretValue)
+            .WithEnvironment("secret_value_1", secretValue)
+            .WithEnvironment("Value", value)
+            .WithEnvironment("CS", rawCs);
+
+        project.WithEnvironment(context =>
         {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "api_roles_outputs_id": "{api-roles.outputs.id}",
-            "api_roles_outputs_clientid": "{api-roles.outputs.clientId}",
-            "api_containerport": "{api.containerPort}",
-            "mydb_outputs_connectionstring": "{mydb.outputs.connectionString}",
-            "storage_outputs_blobendpoint": "{storage.outputs.blobEndpoint}",
-            "pg_secretoutputs": "{pg.secretOutputs}",
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "value0_value": "{value0.value}",
-            "value1_value": "{value1.value}",
-            "cs_connectionstring": "{cs.connectionString}",
-            "outputs_azure_container_apps_environment_default_domain": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_DEFAULT_DOMAIN}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-            "api_containerimage": "{api.containerImage}"
-          }
-        }
-        """;
+            var httpEp = project.GetEndpoint("http");
+            var httpsEp = project.GetEndpoint("https");
+            var internalEp = project.GetEndpoint("internal");
 
-        Assert.Equal(expectedManifest, m);
+            context.EnvironmentVariables["HTTP_EP"] = project.GetEndpoint("http");
+            context.EnvironmentVariables["HTTPS_EP"] = project.GetEndpoint("https");
+            context.EnvironmentVariables["INTERNAL_EP"] = project.GetEndpoint("internal");
+            context.EnvironmentVariables["TARGET_PORT"] = httpEp.Property(EndpointProperty.TargetPort);
+            context.EnvironmentVariables["PORT"] = httpEp.Property(EndpointProperty.Port);
+            context.EnvironmentVariables["HOST"] = httpEp.Property(EndpointProperty.Host);
+            context.EnvironmentVariables["HOSTANDPORT"] = httpEp.Property(EndpointProperty.HostAndPort);
+            context.EnvironmentVariables["SCHEME"] = httpEp.Property(EndpointProperty.Scheme);
+            context.EnvironmentVariables["INTERNAL_HOSTANDPORT"] = internalEp.Property(EndpointProperty.HostAndPort);
+        });
 
-        var expectedRolesManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api-roles.module.bicep",
-          "params": {
-            "storage_outputs_name": "{storage.outputs.name}"
-          }
-        }
-        """;
+        using var app = builder.Build();
 
-        Assert.Equal(expectedRolesManifest, rolesManifest.ToString());
+        await ExecuteBeforeStartHooksAsync(app, default);
 
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-        param api_roles_outputs_id string
+        var proj = Assert.Single(model.GetProjectResources());
+        var identityName = $"{proj.Name}-identity";
+        var projIdentity = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == identityName);
 
-        param api_roles_outputs_clientid string
+        proj.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
 
-        param api_containerport string
+        var resource = target?.DeploymentTarget as AzureProvisioningResource;
 
-        param mydb_outputs_connectionstring string
+        Assert.NotNull(resource);
 
-        param storage_outputs_blobendpoint string
+        var (manifest, bicep) = await GetManifestWithBicep(resource);
+        var (identityManifest, identityBicep) = await GetManifestWithBicep(projIdentity);
 
-        param pg_secretoutputs string
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep")
+              .AppendContentAsFile(identityManifest.ToString(), "json")
+              .AppendContentAsFile(identityBicep, "bicep");
+    }
 
-        param outputs_azure_container_registry_managed_identity_id string
+    [Fact]
+    public async Task AzureContainerAppsBicepGenerationIsIdempotent()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        @secure()
-        param value0_value string
+        builder.AddAzureContainerAppEnvironment("env");
 
-        param value1_value string
+        var secret = builder.AddParameter("secret", secret: true);
+        var kv = builder.AddAzureKeyVault("kv");
 
-        @secure()
-        param cs_connectionstring string
+        builder.AddContainer("api", "myimage")
+               .WithEnvironment("TOP_SECRET", secret)
+                .WithEnvironment("TOP_SECRET2", kv.Resource.GetSecret("secret"));
 
-        param outputs_azure_container_apps_environment_default_domain string
+        using var app = builder.Build();
 
-        param outputs_azure_container_apps_environment_id string
+        await ExecuteBeforeStartHooksAsync(app, default);
 
-        param outputs_azure_container_registry_endpoint string
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-        param api_containerimage string
+        var container = Assert.Single(model.GetContainerResources());
 
-        resource pg_secretoutputs_kv 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-          name: pg_secretoutputs
-        }
+        container.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
 
-        resource pg_secretoutputs_kv_db_connectionString 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
-          name: 'db-connectionString'
-          parent: pg_secretoutputs_kv
-        }
+        var resource = target?.DeploymentTarget as AzureProvisioningResource;
 
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              secrets: [
-                {
-                  name: 'connectionstrings--db'
-                  identity: outputs_azure_container_registry_managed_identity_id
-                  keyVaultUrl: pg_secretoutputs_kv_db_connectionString.properties.secretUri
-                }
-                {
-                  name: 'secretval'
-                  value: value0_value
-                }
-                {
-                  name: 'secret-value-1'
-                  value: value0_value
-                }
-                {
-                  name: 'cs'
-                  value: cs_connectionstring
-                }
-              ]
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: api_containerport
-                transport: 'http'
-                additionalPortMappings: [
-                  {
-                    external: false
-                    targetPort: 8000
-                  }
-                ]
-              }
-              registries: [
-                {
-                  server: outputs_azure_container_registry_endpoint
-                  identity: outputs_azure_container_registry_managed_identity_id
-                }
-              ]
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: api_containerimage
-                  name: 'api'
-                  env: [
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES'
-                      value: 'true'
-                    }
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES'
-                      value: 'true'
-                    }
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY'
-                      value: 'in_memory'
-                    }
-                    {
-                      name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED'
-                      value: 'true'
-                    }
-                    {
-                      name: 'HTTP_PORTS'
-                      value: '${api_containerport};8000'
-                    }
-                    {
-                      name: 'HTTPS_PORTS'
-                      value: api_containerport
-                    }
-                    {
-                      name: 'ConnectionStrings__mydb'
-                      value: mydb_outputs_connectionstring
-                    }
-                    {
-                      name: 'ConnectionStrings__blobs'
-                      value: storage_outputs_blobendpoint
-                    }
-                    {
-                      name: 'ConnectionStrings__db'
-                      secretRef: 'connectionstrings--db'
-                    }
-                    {
-                      name: 'SecretVal'
-                      secretRef: 'secretval'
-                    }
-                    {
-                      name: 'secret_value_1'
-                      secretRef: 'secret-value-1'
-                    }
-                    {
-                      name: 'Value'
-                      value: value1_value
-                    }
-                    {
-                      name: 'CS'
-                      secretRef: 'cs'
-                    }
-                    {
-                      name: 'HTTP_EP'
-                      value: 'http://api.internal.${outputs_azure_container_apps_environment_default_domain}'
-                    }
-                    {
-                      name: 'HTTPS_EP'
-                      value: 'https://api.internal.${outputs_azure_container_apps_environment_default_domain}'
-                    }
-                    {
-                      name: 'INTERNAL_EP'
-                      value: 'http://api:8000'
-                    }
-                    {
-                      name: 'TARGET_PORT'
-                      value: api_containerport
-                    }
-                    {
-                      name: 'PORT'
-                      value: '80'
-                    }
-                    {
-                      name: 'HOST'
-                      value: 'api.internal.${outputs_azure_container_apps_environment_default_domain}'
-                    }
-                    {
-                      name: 'HOSTANDPORT'
-                      value: 'api.internal.${outputs_azure_container_apps_environment_default_domain}:80'
-                    }
-                    {
-                      name: 'SCHEME'
-                      value: 'http'
-                    }
-                    {
-                      name: 'INTERNAL_HOSTANDPORT'
-                      value: 'api:8000'
-                    }
-                    {
-                      name: 'AZURE_CLIENT_ID'
-                      value: api_roles_outputs_clientid
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${api_roles_outputs_id}': { }
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        Assert.NotNull(resource);
 
-        var expectedRolesBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
+        _ = await GetManifestWithBicep(resource);
+        var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        param storage_outputs_name string
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
+    }
 
-        resource api_identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-          name: take('api_identity-${uniqueString(resourceGroup().id)}', 128)
-          location: location
-        }
+    [Fact]
+    public async Task AzureContainerAppsMapsPortsForBaitAndSwitchResources()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
-          name: storage_outputs_name
-        }
+        builder.AddAzureContainerAppEnvironment("env");
 
-        resource storage_StorageBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-          name: guid(storage.id, api_identity.id, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'))
-          properties: {
-            principalId: api_identity.properties.principalId
-            roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-            principalType: 'ServicePrincipal'
-          }
-          scope: storage
-        }
+        builder.AddExecutable("api", "node", ".")
+            .PublishAsDockerFile()
+            .WithHttpEndpoint(env: "PORT");
 
-        resource storage_StorageTableDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-          name: guid(storage.id, api_identity.id, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'))
-          properties: {
-            principalId: api_identity.properties.principalId
-            roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
-            principalType: 'ServicePrincipal'
-          }
-          scope: storage
-        }
+        using var app = builder.Build();
 
-        resource storage_StorageQueueDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-          name: guid(storage.id, api_identity.id, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88'))
-          properties: {
-            principalId: api_identity.properties.principalId
-            roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
-            principalType: 'ServicePrincipal'
-          }
-          scope: storage
-        }
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-        output id string = api_identity.id
+        await ExecuteBeforeStartHooksAsync(app, default);
 
-        output clientId string = api_identity.properties.clientId
+        var container = Assert.Single(model.GetContainerResources());
 
-        output principalId string = api_identity.properties.principalId
-        """;
+        container.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
 
-        output.WriteLine(rolesBicep);
-        Assert.Equal(expectedRolesBicep, rolesBicep);
+        var resource = target?.DeploymentTarget as AzureProvisioningResource;
+
+        Assert.NotNull(resource);
+
+        var (manifest, bicep) = await GetManifestWithBicep(resource);
+
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
+    }
+
+    [Fact]
+    public void MultipleCallsToAddAzureContainerAppEnvironmentThrows()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        builder.AddAzureContainerAppEnvironment("env1");
+        var ex = Assert.Throws<NotSupportedException>(() => builder.AddAzureContainerAppEnvironment("env2"));
+
+        Assert.Equal("Only one container app environment is supported at this time. Found: env1", ex.Message);
+    }
+
+    [Fact]
+    public async Task MultipleAzureContainerAppEnvironmentThrows()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        builder.AddAzureContainerAppEnvironment("env1");
+
+        builder.Resources.Add(new AzureContainerAppEnvironmentResource("env2", infra => { }));
+
+        using var app = builder.Build();
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => ExecuteBeforeStartHooksAsync(app, default));
+
+        Assert.Equal("Multiple container app environments are not supported.", ex.Message);
     }
 
     [Fact]
@@ -1099,7 +514,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
         builder.AddContainer("api", "myimage")
             .PublishAsAzureContainerApp((module, c) =>
             {
@@ -1124,61 +539,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 0
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -1189,7 +551,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         var customDomain = builder.AddParameter("customDomain");
         var certificateName = builder.AddParameter("certificateName");
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(targetPort: 1111)
             .PublishAsAzureContainerApp((module, c) =>
@@ -1213,79 +575,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "certificateName": "{certificateName.value}",
-            "customDomain": "{customDomain.value}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param certificateName string
-
-        param customDomain string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: 1111
-                transport: 'http'
-                customDomains: [
-                  {
-                    name: customDomain
-                    bindingType: (certificateName != '') ? 'SniEnabled' : 'Disabled'
-                    certificateId: (certificateName != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${certificateName}' : null
-                  }
-                ]
-              }
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -1297,7 +588,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         var initialCertificateName = builder.AddParameter("initialCertificateName");
         var expectedCertificateName = builder.AddParameter("expectedCertificateName");
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(targetPort: 1111)
             .PublishAsAzureContainerApp((module, c) =>
@@ -1322,82 +613,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "initialCertificateName": "{initialCertificateName.value}",
-            "customDomain": "{customDomain.value}",
-            "expectedCertificateName": "{expectedCertificateName.value}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param initialCertificateName string
-
-        param customDomain string
-
-        param expectedCertificateName string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: 1111
-                transport: 'http'
-                customDomains: [
-                  {
-                    name: customDomain
-                    bindingType: (expectedCertificateName != '') ? 'SniEnabled' : 'Disabled'
-                    certificateId: (expectedCertificateName != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${expectedCertificateName}' : null
-                  }
-                ]
-              }
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -1411,7 +628,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         var customDomain2 = builder.AddParameter("customDomain2");
         var certificateName2 = builder.AddParameter("certificateName2");
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(targetPort: 1111)
             .PublishAsAzureContainerApp((module, c) =>
@@ -1436,90 +653,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "certificateName1": "{certificateName1.value}",
-            "customDomain1": "{customDomain1.value}",
-            "certificateName2": "{certificateName2.value}",
-            "customDomain2": "{customDomain2.value}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param certificateName1 string
-
-        param customDomain1 string
-
-        param certificateName2 string
-
-        param customDomain2 string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: 1111
-                transport: 'http'
-                customDomains: [
-                  {
-                    name: customDomain1
-                    bindingType: (certificateName1 != '') ? 'SniEnabled' : 'Disabled'
-                    certificateId: (certificateName1 != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${certificateName1}' : null
-                  }
-                  {
-                    name: customDomain2
-                    bindingType: (certificateName2 != '') ? 'SniEnabled' : 'Disabled'
-                    certificateId: (certificateName2 != '') ? '${outputs_azure_container_apps_environment_id}/managedCertificates/${certificateName2}' : null
-                  }
-                ]
-              }
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -1527,7 +662,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithVolume("vol1", "/path1")
@@ -1550,101 +685,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "api_volumes_0_storage": "{api.volumes.0.storage}",
-            "api_volumes_1_storage": "{api.volumes.1.storage}",
-            "api_bindmounts_0_storage": "{api.bindMounts.0.storage}",
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param api_volumes_0_storage string
-
-        param api_volumes_1_storage string
-
-        param api_bindmounts_0_storage string
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                  volumeMounts: [
-                    {
-                      volumeName: 'v0'
-                      mountPath: '/path1'
-                    }
-                    {
-                      volumeName: 'v1'
-                      mountPath: '/path2'
-                    }
-                    {
-                      volumeName: 'bm0'
-                      mountPath: '/path3'
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-              volumes: [
-                {
-                  name: 'v0'
-                  storageType: 'AzureFile'
-                  storageName: api_volumes_0_storage
-                }
-                {
-                  name: 'v1'
-                  storageType: 'AzureFile'
-                  storageName: api_volumes_1_storage
-                }
-                {
-                  name: 'bm0'
-                  storageType: 'AzureFile'
-                  storageName: api_bindmounts_0_storage
-                }
-              ]
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -1652,7 +694,9 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
+#pragma warning disable CS0618 // Type or member is obsolete
         builder.AddAzureContainerAppsInfrastructure();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         var db = builder.AddAzureCosmosDB("mydb").WithAccessKeyAuthentication();
         db.AddCosmosDatabase("db");
@@ -1693,129 +737,50 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
+    }
 
-        var expectedManifest =
-        """
+    [Fact]
+    public async Task SecretOutputsThrowNotSupportedExceptionWithContainerAppEnvironmentResource()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        builder.AddAzureContainerAppEnvironment("cae");
+
+        var resource = builder.AddAzureInfrastructure("resourceWithSecret", infra =>
         {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "mydb_secretoutputs": "{mydb.secretOutputs}",
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "mydb_secretoutputs_connectionstring": "{mydb.secretOutputs.connectionString}",
-            "mydb_secretoutputs_connectionstring1": "{mydb.secretOutputs.connectionString1}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
+            var kvNameParam = new ProvisioningParameter(AzureBicepResource.KnownParameters.KeyVaultName, typeof(string));
+            infra.Add(kvNameParam);
 
-        Assert.Equal(expectedManifest, m);
+            var kv = KeyVaultService.FromExisting("kv");
+            kv.Name = kvNameParam;
+            infra.Add(kv);
 
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param mydb_secretoutputs string
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        @secure()
-        param mydb_secretoutputs_connectionstring string
-
-        @secure()
-        param mydb_secretoutputs_connectionstring1 string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource mydb_secretoutputs_kv 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-          name: mydb_secretoutputs
-        }
-
-        resource mydb_secretoutputs_kv_connectionString 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
-          name: 'connectionString'
-          parent: mydb_secretoutputs_kv
-        }
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              secrets: [
+            var secret = new KeyVaultSecret("kvs")
+            {
+                Name = "myconnection",
+                Properties = new()
                 {
-                  name: 'connectionstrings--mydb'
-                  identity: outputs_azure_container_registry_managed_identity_id
-                  keyVaultUrl: mydb_secretoutputs_kv_connectionString.properties.secretUri
-                }
-                {
-                  name: 'connectionstring'
-                  identity: outputs_azure_container_registry_managed_identity_id
-                  keyVaultUrl: mydb_secretoutputs_kv_connectionString.properties.secretUri
-                }
-                {
-                  name: 'secret0'
-                  identity: outputs_azure_container_registry_managed_identity_id
-                  keyVaultUrl: mydb_secretoutputs_kv_connectionString.properties.secretUri
-                }
-                {
-                  name: 'secret1'
-                  identity: outputs_azure_container_registry_managed_identity_id
-                  keyVaultUrl: mydb_secretoutputs_kv_connectionString.properties.secretUri
-                }
-                {
-                  name: 'complex'
-                  value: 'a/${mydb_secretoutputs_connectionstring}/${mydb_secretoutputs_connectionstring}/${mydb_secretoutputs_connectionstring1}'
-                }
-              ]
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'image:latest'
-                  name: 'api'
-                  env: [
-                    {
-                      name: 'ConnectionStrings__mydb'
-                      secretRef: 'connectionstrings--mydb'
-                    }
-                    {
-                      name: 'connectionString'
-                      secretRef: 'connectionstring'
-                    }
-                    {
-                      name: 'secret0'
-                      secretRef: 'secret0'
-                    }
-                    {
-                      name: 'secret1'
-                      secretRef: 'secret1'
-                    }
-                    {
-                      name: 'complex'
-                      secretRef: 'complex'
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+                    Value = "top secret"
+                },
+                Parent = kv,
+            };
+
+            infra.Add(secret);
+        });
+
+        builder.AddContainer("api", "image")
+            .WithEnvironment(context =>
+            {
+                context.EnvironmentVariables["secret0"] = resource.GetSecretOutput("myconnection");
+            });
+
+        using var app = builder.Build();
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() => ExecuteBeforeStartHooksAsync(app, default));
+
+        Assert.Equal("Automatic Key vault generation is not supported in this environment. Please create a key vault resource directly.", ex.Message);
     }
 
     [Fact]
@@ -1824,7 +789,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
         builder.Services.Configure<AzureProvisioningOptions>(options => options.ProvisioningBuildOptions.InfrastructureResolvers.Insert(0, new MyResourceNamePropertyResolver()));
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api1", "myimage");
 
@@ -1844,45 +809,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (_, bicep) = await GetManifestWithBicep(resource);
 
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api1 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api1-my'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api1'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(bicep, "bicep");
     }
 
     private sealed class MyResourceNamePropertyResolver : DynamicResourceNamePropertyResolver
@@ -1903,7 +830,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint()
@@ -1925,66 +852,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: true
-                targetPort: 8000
-                transport: 'http'
-              }
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -1992,7 +861,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(name: "one", targetPort: 8080)
@@ -2014,72 +883,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: 8080
-                transport: 'http'
-                additionalPortMappings: [
-                  {
-                    external: false
-                    targetPort: 8081
-                  }
-                ]
-              }
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -2087,7 +892,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint()
@@ -2110,66 +915,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: true
-                targetPort: 8000
-                transport: 'http2'
-              }
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: 'myimage:latest'
-                  name: 'api'
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -2177,7 +924,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddProject<Project>("api", launchProfileName: null)
                .WithHttpEndpoint()
@@ -2199,107 +946,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
 
-        var m = manifest.ToString();
-
-        var expectedManifest =
-        """
-        {
-          "type": "azure.bicep.v0",
-          "path": "api.module.bicep",
-          "params": {
-            "api_containerport": "{api.containerPort}",
-            "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-            "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-            "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-            "api_containerimage": "{api.containerImage}"
-          }
-        }
-        """;
-
-        Assert.Equal(expectedManifest, m);
-
-        var expectedBicep =
-        """
-        @description('The location for the resource(s) to be deployed.')
-        param location string = resourceGroup().location
-
-        param api_containerport string
-
-        param outputs_azure_container_registry_managed_identity_id string
-
-        param outputs_azure_container_apps_environment_id string
-
-        param outputs_azure_container_registry_endpoint string
-
-        param api_containerimage string
-
-        resource api 'Microsoft.App/containerApps@2024-03-01' = {
-          name: 'api'
-          location: location
-          properties: {
-            configuration: {
-              activeRevisionsMode: 'Single'
-              ingress: {
-                external: false
-                targetPort: api_containerport
-                transport: 'http'
-              }
-              registries: [
-                {
-                  server: outputs_azure_container_registry_endpoint
-                  identity: outputs_azure_container_registry_managed_identity_id
-                }
-              ]
-            }
-            environmentId: outputs_azure_container_apps_environment_id
-            template: {
-              containers: [
-                {
-                  image: api_containerimage
-                  name: 'api'
-                  env: [
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES'
-                      value: 'true'
-                    }
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES'
-                      value: 'true'
-                    }
-                    {
-                      name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY'
-                      value: 'in_memory'
-                    }
-                    {
-                      name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED'
-                      value: 'true'
-                    }
-                    {
-                      name: 'HTTP_PORTS'
-                      value: api_containerport
-                    }
-                    {
-                      name: 'HTTPS_PORTS'
-                      value: api_containerport
-                    }
-                  ]
-                }
-              ]
-              scale: {
-                minReplicas: 1
-              }
-            }
-          }
-          identity: {
-            type: 'UserAssigned'
-            userAssignedIdentities: {
-              '${outputs_azure_container_registry_managed_identity_id}': { }
-            }
-          }
-        }
-        """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
     }
 
     [Fact]
@@ -2307,7 +955,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         var storageName = builder.AddParameter("storageName");
         var storageRG = builder.AddParameter("storageRG");
@@ -2326,8 +974,8 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         await ExecuteBeforeStartHooksAsync(app, default);
 
         var project = Assert.Single(model.GetProjectResources());
-        var projRoles = Assert.Single(model.Resources.OfType<AzureProvisioningResource>().Where(r => r.Name == $"api-roles"));
-        var projRolesStorage = Assert.Single(model.Resources.OfType<AzureProvisioningResource>().Where(r => r.Name == $"api-roles-storage"));
+        var projIdentity = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "api-identity");
+        var projRolesStorage = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "api-roles-storage");
 
         project.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
 
@@ -2336,171 +984,100 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         Assert.NotNull(resource);
 
         var (manifest, bicep) = await GetManifestWithBicep(resource);
-        var (rolesManifest, rolesBicep) = await GetManifestWithBicep(projRoles);
+        var (identityManifest, identityBicep) = await GetManifestWithBicep(projIdentity);
         var (rolesStorageManifest, rolesStorageBicep) = await GetManifestWithBicep(projRolesStorage);
 
-        var expectedManifest =
-            """
-            {
-              "type": "azure.bicep.v0",
-              "path": "api.module.bicep",
-              "params": {
-                "api_roles_outputs_id": "{api-roles.outputs.id}",
-                "api_roles_outputs_clientid": "{api-roles.outputs.clientId}",
-                "outputs_azure_container_registry_managed_identity_id": "{.outputs.AZURE_CONTAINER_REGISTRY_MANAGED_IDENTITY_ID}",
-                "outputs_azure_container_apps_environment_id": "{.outputs.AZURE_CONTAINER_APPS_ENVIRONMENT_ID}",
-                "outputs_azure_container_registry_endpoint": "{.outputs.AZURE_CONTAINER_REGISTRY_ENDPOINT}",
-                "api_containerimage": "{api.containerImage}"
-              }
-            }
-            """;
-        Assert.Equal(expectedManifest, manifest.ToString());
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep")
+              .AppendContentAsFile(rolesStorageManifest.ToString(), "json")
+              .AppendContentAsFile(rolesStorageBicep, "bicep")
+              .AppendContentAsFile(identityManifest.ToString(), "json")
+              .AppendContentAsFile(identityBicep, "bicep");
+    }
 
-        var expectedRolesManifest =
-            """
-            {
-              "type": "azure.bicep.v0",
-              "path": "api-roles.module.bicep"
-            }
-            """;
-        Assert.Equal(expectedRolesManifest, rolesManifest.ToString());
+    [Fact]
+    public async Task RoleAssignmentsWithAsExistingCosmosDB()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        var expectedRolesStorageManifest =
-            """
-            {
-              "type": "azure.bicep.v1",
-              "path": "api-roles-storage.module.bicep",
-              "params": {
-                "storage_outputs_name": "{storage.outputs.name}",
-                "api_roles_outputs_id": "{api-roles.outputs.id}",
-                "api_roles_outputs_principalid": "{api-roles.outputs.principalId}"
-              },
-              "scope": {
-                "resourceGroup": "{storageRG.value}"
-              }
-            }
-            """;
-        Assert.Equal(expectedRolesStorageManifest, rolesStorageManifest.ToString());
+        builder.AddAzureContainerAppEnvironment("env");
 
-        var expectedBicep =
-            """
-            @description('The location for the resource(s) to be deployed.')
-            param location string = resourceGroup().location
+        var cosmosName = builder.AddParameter("cosmosName");
+        var cosmosRG = builder.AddParameter("cosmosRG");
 
-            param api_roles_outputs_id string
+        var cosmos = builder.AddAzureCosmosDB("cosmos")
+            .PublishAsExisting(cosmosName, cosmosRG);
 
-            param api_roles_outputs_clientid string
+        builder.AddProject<Project>("api", launchProfileName: null)
+               .WithReference(cosmos);
 
-            param outputs_azure_container_registry_managed_identity_id string
+        using var app = builder.Build();
 
-            param outputs_azure_container_apps_environment_id string
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-            param outputs_azure_container_registry_endpoint string
+        await ExecuteBeforeStartHooksAsync(app, default);
 
-            param api_containerimage string
+        var project = Assert.Single(model.GetProjectResources());
+        var projIdentity = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "api-identity");
+        var projRolesStorage = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "api-roles-cosmos");
 
-            resource api 'Microsoft.App/containerApps@2024-03-01' = {
-              name: 'api'
-              location: location
-              properties: {
-                configuration: {
-                  activeRevisionsMode: 'Single'
-                  registries: [
-                    {
-                      server: outputs_azure_container_registry_endpoint
-                      identity: outputs_azure_container_registry_managed_identity_id
-                    }
-                  ]
-                }
-                environmentId: outputs_azure_container_apps_environment_id
-                template: {
-                  containers: [
-                    {
-                      image: api_containerimage
-                      name: 'api'
-                      env: [
-                        {
-                          name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES'
-                          value: 'true'
-                        }
-                        {
-                          name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES'
-                          value: 'true'
-                        }
-                        {
-                          name: 'OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY'
-                          value: 'in_memory'
-                        }
-                        {
-                          name: 'AZURE_CLIENT_ID'
-                          value: api_roles_outputs_clientid
-                        }
-                      ]
-                    }
-                  ]
-                  scale: {
-                    minReplicas: 1
-                  }
-                }
-              }
-              identity: {
-                type: 'UserAssigned'
-                userAssignedIdentities: {
-                  '${api_roles_outputs_id}': { }
-                  '${outputs_azure_container_registry_managed_identity_id}': { }
-                }
-              }
-            }
-            """;
-        output.WriteLine(bicep);
-        Assert.Equal(expectedBicep, bicep);
+        project.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
 
-        var expectedRolesBicep =
-            """
-            @description('The location for the resource(s) to be deployed.')
-            param location string = resourceGroup().location
+        var resource = target?.DeploymentTarget as AzureProvisioningResource;
 
-            resource api_identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-              name: take('api_identity-${uniqueString(resourceGroup().id)}', 128)
-              location: location
-            }
+        Assert.NotNull(resource);
 
-            output id string = api_identity.id
+        var (manifest, bicep) = await GetManifestWithBicep(resource);
+        var (identityManifest, identityBicep) = await GetManifestWithBicep(projIdentity);
+        var (rolesCosmosManifest, rolesCosmosBicep) = await GetManifestWithBicep(projRolesStorage);
 
-            output clientId string = api_identity.properties.clientId
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep")
+              .AppendContentAsFile(rolesCosmosManifest.ToString(), "json")
+              .AppendContentAsFile(rolesCosmosBicep, "bicep")
+              .AppendContentAsFile(identityManifest.ToString(), "json")
+              .AppendContentAsFile(identityBicep, "bicep");
+    }
 
-            output principalId string = api_identity.properties.principalId
-            """;
-        output.WriteLine(rolesBicep);
-        Assert.Equal(expectedRolesBicep, rolesBicep);
+    [Fact]
+    public async Task RoleAssignmentsWithAsExistingRedis()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        var expectedRolesStorageBicep =
-            """
-            @description('The location for the resource(s) to be deployed.')
-            param location string = resourceGroup().location
+        builder.AddAzureContainerAppEnvironment("env");
 
-            param storage_outputs_name string
+        var redis = builder.AddAzureRedis("redis")
+            .PublishAsExisting("myredis", "myRG");
 
-            param api_roles_outputs_id string
+        builder.AddProject<Project>("api", launchProfileName: null)
+            .WithReference(redis);
 
-            param api_roles_outputs_principalid string
+        using var app = builder.Build();
 
-            resource storage 'Microsoft.Storage/storageAccounts@2024-01-01' existing = {
-              name: storage_outputs_name
-            }
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
 
-            resource storage_StorageBlobDataReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-              name: guid(storage.id, api_roles_outputs_id, subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1'))
-              properties: {
-                principalId: api_roles_outputs_principalid
-                roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
-                principalType: 'ServicePrincipal'
-              }
-              scope: storage
-            }
-            """;
-        output.WriteLine(rolesStorageBicep);
-        Assert.Equal(expectedRolesStorageBicep, rolesStorageBicep);
+        await ExecuteBeforeStartHooksAsync(app, default);
+
+        var project = Assert.Single(model.GetProjectResources());
+        var projIdentity = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "api-identity");
+        var projRolesStorage = Assert.Single(model.Resources.OfType<AzureProvisioningResource>(), r => r.Name == "api-roles-redis");
+
+        project.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
+
+        var resource = target?.DeploymentTarget as AzureProvisioningResource;
+
+        Assert.NotNull(resource);
+
+        var (manifest, bicep) = await GetManifestWithBicep(resource);
+        var (identityManifest, identityBicep) = await GetManifestWithBicep(projIdentity);
+        var (rolesRedisManifest, rolesRedisBicep) = await GetManifestWithBicep(projRolesStorage);
+
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep")
+              .AppendContentAsFile(rolesRedisManifest.ToString(), "json")
+              .AppendContentAsFile(rolesRedisBicep, "bicep")
+              .AppendContentAsFile(identityManifest.ToString(), "json")
+              .AppendContentAsFile(identityBicep, "bicep");
     }
 
     [Fact]
@@ -2508,7 +1085,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithEndpoint(scheme: "foo");
@@ -2527,7 +1104,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(name: "ep1")
@@ -2548,7 +1125,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithEndpoint("ep1", e => e.IsExternal = true);
@@ -2567,7 +1144,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(targetPort: 80)
@@ -2587,7 +1164,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpEndpoint(port: 8081);
@@ -2606,7 +1183,7 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
     {
         var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
 
-        builder.AddAzureContainerAppsInfrastructure();
+        builder.AddAzureContainerAppEnvironment("env");
 
         builder.AddContainer("api", "myimage")
             .WithHttpsEndpoint(port: 8081);
@@ -2620,11 +1197,178 @@ public class AzureContainerAppsTests(ITestOutputHelper output)
         Assert.Equal($"The endpoint 'https' is an https endpoint and must use port 443", ex.Message);
     }
 
+    [Fact]
+    public async Task AddContainerAppEnvironmentDoesNotAddEnvironmentResourceInRunMode()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+
+        builder.AddAzureContainerAppEnvironment("env");
+
+        using var app = builder.Build();
+
+        await ExecuteBeforeStartHooksAsync(app, default);
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+
+        Assert.Empty(model.Resources.OfType<AzureContainerAppEnvironmentResource>());
+    }
+
+    [Fact]
+    public async Task KnownParametersAreNotSetWhenUsingAzdResources()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+#pragma warning disable CS0618 // Type or member is obsolete
+        builder.AddAzureContainerAppsInfrastructure();
+#pragma warning restore CS0618 // Type or member is obsolete
+
+        var pg = builder.AddAzurePostgresFlexibleServer("pg")
+                        .WithPasswordAuthentication()
+                        .AddDatabase("db");
+
+        builder.AddContainer("cache", "redis")
+               .WithVolume("data", "/data")
+               .WithReference(pg);
+
+        using var app = builder.Build();
+
+        await ExecuteBeforeStartHooksAsync(app, default);
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+
+        foreach (var resource in model.Resources.OfType<AzureBicepResource>())
+        {
+            foreach (var param in resource.Parameters)
+            {
+                if (param.Key == AzureBicepResource.KnownParameters.KeyVaultName)
+                {
+                    // Skip kv since we fill it in by default
+                    continue;
+                }
+
+                if (AzureBicepResource.KnownParameters.IsKnownParameterName(param.Key))
+                {
+                    Assert.Equal(string.Empty, param.Value);
+                }
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AddContainerAppEnvironmentAddsEnvironmentResource(bool useAzdNaming)
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        var env = builder.AddAzureContainerAppEnvironment("env");
+
+        if (useAzdNaming)
+        {
+            env.WithAzdResourceNaming();
+        }
+
+        var pg = builder.AddAzurePostgresFlexibleServer("pg")
+                        .WithPasswordAuthentication()
+                        .AddDatabase("db");
+
+        builder.AddContainer("cache", "redis")
+               .WithVolume("App.da-ta", "/data")
+               .WithReference(pg);
+
+        using var app = builder.Build();
+
+        await ExecuteBeforeStartHooksAsync(app, default);
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+
+        var environment = Assert.Single(model.Resources.OfType<AzureContainerAppEnvironmentResource>());
+
+        var (manifest, bicep) = await GetManifestWithBicep(environment);
+
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
+    }
+
+    // see https://github.com/dotnet/aspire/issues/8381 for more information on this scenario
+    // Azure SqlServer needs an admin when it is first provisioned. To supply this, we use the
+    // principalId from the Azure Container App Environment.
+    [Fact]
+    public async Task AddContainerAppEnvironmentWorksWithSqlServer()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        builder.AddAzureContainerAppEnvironment("env");
+
+        var sql = builder.AddAzureSqlServer("sql");
+        var db = sql.AddDatabase("db").WithDefaultAzureSku();
+
+        builder.AddContainer("cache", "redis")
+               .WithReference(db);
+
+        using var app = builder.Build();
+
+        await ExecuteBeforeStartHooksAsync(app, default);
+
+        var (manifest, bicep) = await GetManifestWithBicep(sql.Resource);
+
+        await Verify(manifest.ToString(), "json")
+              .AppendContentAsFile(bicep, "bicep");
+    }
+
+    [Fact]
+    public async Task ContainerAppEnvironmentWithCustomRegistry()
+    {
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+
+        // Create a custom registry
+        var registry = builder.AddAzureContainerRegistry("customregistry");
+
+        // Create a container app environment and associate it with the custom registry
+        builder.AddAzureContainerAppEnvironment("env")
+            .WithAzureContainerRegistry(registry);
+
+        // Add a container that will use the environment
+        builder.AddProject<Project>("api", launchProfileName: null)
+            .WithHttpEndpoint();
+
+        using var app = builder.Build();
+
+        await ExecuteBeforeStartHooksAsync(app, default);
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+
+        // Verify environment resource exists
+        var environment = Assert.Single(model.Resources.OfType<AzureContainerAppEnvironmentResource>());
+
+        // Verify project resource exists
+        var project = Assert.Single(model.GetProjectResources());
+
+        // Get the bicep for the environment
+        var (envManifest, envBicep) = await GetManifestWithBicep(environment);
+
+        // Verify container has correct deployment target
+        project.TryGetLastAnnotation<DeploymentTargetAnnotation>(out var target);
+        var projectResource = target?.DeploymentTarget as AzureProvisioningResource;
+        Assert.NotNull(projectResource);
+
+        // Get the bicep for the container
+        var (containerManifest, containerBicep) = await GetManifestWithBicep(projectResource);
+
+        // Verify the Azure Container Registry resource manifest and bicep
+        var containerRegistry = Assert.Single(model.Resources.OfType<AzureContainerRegistryResource>());
+        var (registryManifest, registryBicep) = await GetManifestWithBicep(containerRegistry);
+
+        await Verify(envManifest.ToString(), "json")
+              .AppendContentAsFile(envBicep, "bicep")
+              .AppendContentAsFile(containerManifest.ToString(), "json")
+              .AppendContentAsFile(containerBicep, "bicep")
+              .AppendContentAsFile(registryManifest.ToString(), "json")
+              .AppendContentAsFile(registryBicep, "bicep");
+    }
+
     private static Task<(JsonNode ManifestNode, string BicepText)> GetManifestWithBicep(IResource resource) =>
         AzureManifestUtils.GetManifestWithBicep(resource, skipPreparer: true);
-
-    [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "ExecuteBeforeStartHooksAsync")]
-    private static extern Task ExecuteBeforeStartHooksAsync(DistributedApplication app, CancellationToken cancellationToken);
 
     private sealed class Project : IProjectMetadata
     {

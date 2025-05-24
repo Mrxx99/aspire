@@ -23,6 +23,10 @@ namespace Aspire.Hosting
         [System.Diagnostics.CodeAnalysis.MemberNotNullWhen(true, "ConnectionStringSecretOutput")]
         public bool UseAccessKeyAuthentication { get { throw null; } }
 
+        public override global::Azure.Provisioning.Primitives.ProvisionableResource AddAsExistingResource(Azure.AzureResourceInfrastructure infra) { throw null; }
+
+        public override void AddRoleAssignments(Azure.IAddRoleAssignmentsContext roleAssignmentContext) { }
+
         void Azure.IResourceWithAzureFunctionsConfig.ApplyAzureFunctionsConfiguration(System.Collections.Generic.IDictionary<string, object> target, string connectionName) { }
     }
 
@@ -39,12 +43,14 @@ namespace Aspire.Hosting
 
         public static ApplicationModel.IResourceBuilder<AzureCosmosDBResource> RunAsEmulator(this ApplicationModel.IResourceBuilder<AzureCosmosDBResource> builder, System.Action<ApplicationModel.IResourceBuilder<Azure.AzureCosmosDBEmulatorResource>>? configureContainer = null) { throw null; }
 
-        [System.Diagnostics.CodeAnalysis.Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+        [System.Diagnostics.CodeAnalysis.Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
         public static ApplicationModel.IResourceBuilder<AzureCosmosDBResource> RunAsPreviewEmulator(this ApplicationModel.IResourceBuilder<AzureCosmosDBResource> builder, System.Action<ApplicationModel.IResourceBuilder<Azure.AzureCosmosDBEmulatorResource>>? configureContainer = null) { throw null; }
+
+        public static ApplicationModel.IResourceBuilder<AzureCosmosDBResource> WithAccessKeyAuthentication(this ApplicationModel.IResourceBuilder<AzureCosmosDBResource> builder, ApplicationModel.IResourceBuilder<Azure.IAzureKeyVaultResource> keyVaultBuilder) { throw null; }
 
         public static ApplicationModel.IResourceBuilder<AzureCosmosDBResource> WithAccessKeyAuthentication(this ApplicationModel.IResourceBuilder<AzureCosmosDBResource> builder) { throw null; }
 
-        [System.Diagnostics.CodeAnalysis.Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/dotnet/aspire/diagnostics#{0}")]
+        [System.Diagnostics.CodeAnalysis.Experimental("ASPIRECOSMOSDB001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
         public static ApplicationModel.IResourceBuilder<Azure.AzureCosmosDBEmulatorResource> WithDataExplorer(this ApplicationModel.IResourceBuilder<Azure.AzureCosmosDBEmulatorResource> builder, int? port = null) { throw null; }
 
         public static ApplicationModel.IResourceBuilder<Azure.AzureCosmosDBEmulatorResource> WithDataVolume(this ApplicationModel.IResourceBuilder<Azure.AzureCosmosDBEmulatorResource> builder, string? name = null) { throw null; }

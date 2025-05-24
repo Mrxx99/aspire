@@ -4,6 +4,8 @@
 using System.Diagnostics;
 using Aspire.Hosting.ApplicationModel;
 using Azure.Provisioning;
+using Azure.Provisioning.Authorization;
+using Azure.Provisioning.Expressions;
 using Azure.Provisioning.Primitives;
 
 namespace Aspire.Hosting.Azure;
@@ -28,11 +30,46 @@ public class AzureProvisioningResource(string name, Action<AzureResourceInfrastr
     public ProvisioningBuildOptions? ProvisioningBuildOptions { get; set; }
 
     /// <summary>
-    /// Creates a new <see cref="ProvisionableResource"/> representing an existing Azure resource with the specified name.
+    /// Adds a new <see cref="ProvisionableResource"/> into <paramref name="infra"/>. The new resource
+    /// represents a reference to the current <see cref="AzureProvisioningResource"/> via https://learn.microsoft.com/azure/azure-resource-manager/bicep/existing-resource.
     /// </summary>
-    /// <param name="name">The name of the existing resource.</param>
+    /// <param name="infra">The <see cref="AzureResourceInfrastructure"/> to add the existing resource into.</param>
     /// <returns>A new <see cref="ProvisionableResource"/>, typically using the FromExisting method on the derived <see cref="ProvisionableResource"/> class.</returns>
-    public virtual ProvisionableResource CreateExistingResource(BicepValue<string> name) => throw new NotImplementedException();
+    public virtual ProvisionableResource AddAsExistingResource(AzureResourceInfrastructure infra) => throw new NotImplementedException();
+
+    /// <summary>
+    /// Adds role assignments to this Azure resource.
+    /// </summary>
+    /// <param name="roleAssignmentContext">The context containing information about the role assignments and what principal to use.</param>
+    public virtual void AddRoleAssignments(IAddRoleAssignmentsContext roleAssignmentContext)
+    {
+        var infra = roleAssignmentContext.Infrastructure;
+        var prefix = this.GetBicepIdentifier();
+        var existingResource = AddAsExistingResource(infra);
+
+        var principalType = roleAssignmentContext.PrincipalType;
+        var principalId = roleAssignmentContext.PrincipalId;
+
+        foreach (var role in roleAssignmentContext.Roles)
+        {
+            infra.Add(CreateRoleAssignment(prefix, existingResource, role.Id, role.Name, principalType, principalId));
+        }
+    }
+
+    private static RoleAssignment CreateRoleAssignment(string prefix, ProvisionableResource scope, string roleId, string roleName, BicepValue<RoleManagementPrincipalType> principalType, BicepValue<Guid> principalId)
+    {
+        var raName = Infrastructure.NormalizeBicepIdentifier($"{prefix}_{roleName}");
+        var id = new MemberExpression(new IdentifierExpression(scope.BicepIdentifier), "id");
+
+        return new RoleAssignment(raName)
+        {
+            Name = BicepFunction.CreateGuid(id, principalId, BicepFunction.GetSubscriptionResourceId("Microsoft.Authorization/roleDefinitions", roleId)),
+            Scope = new IdentifierExpression(scope.BicepIdentifier),
+            PrincipalType = principalType,
+            RoleDefinitionId = BicepFunction.GetSubscriptionResourceId("Microsoft.Authorization/roleDefinitions", roleId),
+            PrincipalId = principalId
+        };
+    }
 
     /// <inheritdoc/>
     public override BicepTemplateFile GetBicepTemplateFile(string? directory = null, bool deleteTemporaryFileOnDispose = true)
