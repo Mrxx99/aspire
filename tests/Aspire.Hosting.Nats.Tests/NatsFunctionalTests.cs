@@ -397,8 +397,8 @@ public class NatsFunctionalTests(ITestOutputHelper testOutputHelper)
         Assert.Equal(2, connectionConfigs.Length);
         Array.Sort(connectionConfigs, (a, b) => a.Name.CompareTo(b.Name));
         Assert.Single(connectionConfigs[0].Hosts);
-        Assert.Equal($"{nats.Resource.Name}:{nats.Resource.PrimaryEndpoint.TargetPort}", connectionConfigs[0].Hosts[0]);
+        Assert.Equal($"nats://{nats.Resource.Name}:{nats.Resource.PrimaryEndpoint.TargetPort}", connectionConfigs[0].Hosts[0]);
         Assert.Single(connectionConfigs[1].Hosts);
-        Assert.Equal($"{nats2.Resource.Name}:{nats2.Resource.PrimaryEndpoint.TargetPort}", connectionConfigs[1].Hosts[0]);
+        Assert.Equal($"nats://{nats2.Resource.Name}:{nats2.Resource.PrimaryEndpoint.TargetPort}", connectionConfigs[1].Hosts[0]);
     }
 }

@@ -1,7 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Net.Http.Json;
+using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Nats;
 using Aspire.NATS.Net;
@@ -9,7 +9,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using NATS.Client.Core;
-using Polly;
 
 namespace Aspire.Hosting;
 
@@ -188,66 +187,41 @@ public static class NatsBuilderExtensions
                                                  .WithImageRegistry(NatsContainerImageTags.NuiRegistry)
                                                  .WithHttpEndpoint(targetPort: 31311, name: "http")
                                                  .WithVolume(VolumeNameGenerator.Generate(builder, "db"), "/db")
+                                                 .WithArgs("--nats-cli-contexts=/nats-cli-contexts") // https://natsnui.app/help/#connections-import
                                                  .ExcludeFromManifest();
 
-            builder.ApplicationBuilder.Eventing.Subscribe<AfterResourcesCreatedEvent>(async (e, ct) =>
+            builder.ApplicationBuilder.Eventing.Subscribe<AfterEndpointsAllocatedEvent>(async (e, ct) =>
             {
                 var natsInstances = builder.ApplicationBuilder.Resources.OfType<NatsServerResource>();
-
-                if (!natsInstances.Any())
-                {
-                    // No-op if there are no NATS resources present.
-                    return;
-                }
-
-                var nuiInstance = builder.ApplicationBuilder.Resources.OfType<NuiResource>().Single();
-                var nuiEnpoint = nuiInstance.PrimaryEndpoint;
-
-                var httpClientFactory = e.Services.GetRequiredService<IHttpClientFactory>();
+                var aspireStore = e.Services.GetRequiredService<IAspireStore>();
 
                 foreach (var natsInstance in natsInstances)
                 {
-                    if (natsInstance.PrimaryEndpoint.IsAllocated)
+                    // Create nats CLI context json file content in a temporary file
+                    var tempConfigFile = await WriteNatsCliContextJson(natsInstance, ct).ConfigureAwait(false);
+
+                    try
                     {
-                        var natsEndpoint = natsInstance.PrimaryEndpoint;
+                        // Deterministic file path for the configuration file based on its content
+                        var configJsonPath = aspireStore.GetFileNameWithContent($"{builder.Resource.Name}-{natsInstance.Name}-context.json", tempConfigFile);
 
-                        var nuiConnectionConfig = new NuiConnectionConfig(natsInstance.Name)
+                        // Need to grant read access to the config file on unix like systems.
+                        if (!OperatingSystem.IsWindows())
                         {
-                            Hosts = [$"{natsEndpoint.Resource.Name}:{natsEndpoint.TargetPort}"]
-                        };
-
-                        if (!string.IsNullOrEmpty(natsInstance.PasswordParameter?.Value))
-                        {
-                            nuiConnectionConfig.Auth = [
-                                new NuiConnectionAuth
-                                {
-                                    Active = true,
-                                    Mode = "auth_user_password",
-                                    Username = await natsInstance.UserNameReference.GetValueAsync(ct).ConfigureAwait(false),
-                                    Password = natsInstance.PasswordParameter?.Value
-                                }
-                            ];
+                            File.SetUnixFileMode(configJsonPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
                         }
 
-                        var client = httpClientFactory.CreateClient();
-                        client.BaseAddress = new Uri($"{nuiEnpoint.Scheme}://{nuiEnpoint.Host}:{nuiEnpoint.Port}");
-
-                        var pipeline = new ResiliencePipelineBuilder().AddRetry(new Polly.Retry.RetryStrategyOptions
+                        nuiContainerBuilder.WithBindMount(configJsonPath, $"/nats-cli-contexts/{natsInstance.Name}.json");
+                    }
+                    finally
+                    {
+                        try
                         {
-                            Delay = TimeSpan.FromSeconds(2),
-                            MaxRetryAttempts = 5,
-                        }).Build();
-
-                        await pipeline.ExecuteAsync(async (ctx) =>
+                            File.Delete(tempConfigFile);
+                        }
+                        catch
                         {
-                            var response = await client.PostAsJsonAsync("/api/connection", nuiConnectionConfig, ctx)
-                                .ConfigureAwait(false);
-
-                            response.EnsureSuccessStatusCode();
-
-                            var d = await response.Content.ReadFromJsonAsync<NuiConnectionConfig>(ctx).ConfigureAwait(false);
-
-                        }, ct).ConfigureAwait(false);
+                        }
                     }
                 }
             });
@@ -318,5 +292,28 @@ public static class NatsBuilderExtensions
 
         return builder.WithBindMount(source, "/var/lib/nats", isReadOnly)
             .WithArgs("-sd", "/var/lib/nats");
+    }
+
+    // https://github.com/nats-io/nats.docs/blob/master/using-nats/nats-tools/nats_cli/README.md#nats-contexts
+    private static async Task<string> WriteNatsCliContextJson(NatsServerResource natsInstance, CancellationToken ct)
+    {
+        // This temporary file is not used by the container, it will be copied and then deleted
+        var filePath = Path.GetTempFileName();
+
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Write);
+        using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
+
+        writer.WriteStartObject();
+
+        var endpoint = natsInstance.PrimaryEndpoint;
+
+        writer.WriteString("description", natsInstance.Name);
+        writer.WriteString("url", $"nats://{natsInstance.Name}:{endpoint.TargetPort}");
+        writer.WriteString("user", await natsInstance.UserNameReference.GetValueAsync(ct).ConfigureAwait(false));
+        writer.WriteString("password", natsInstance.PasswordParameter?.Value);
+
+        writer.WriteEndObject();
+
+        return filePath;
     }
 }
