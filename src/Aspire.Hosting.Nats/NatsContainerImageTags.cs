@@ -20,5 +20,5 @@ internal static class NatsContainerImageTags
     public const string NuiImage = "nats-nui/nui";
 
     /// <remarks>0.6.1</remarks>
-    public const string NuiTag = "0.6.1";
+    public const string NuiTag = "0.7.0";
 }
